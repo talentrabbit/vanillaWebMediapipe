@@ -22,7 +22,10 @@ const DIGIT_COLORS = [
   ["#ffe08f", "#ff8a58"]
 ];
 
+const CUSTOM_DIGIT_FOLDER = "./assets/custom-png";
+const textureLoader = new THREE.TextureLoader();
 const digitTextures = new Map();
+const customDigitChecks = new Map();
 let currentDigit = null;
 let pendingDigit = null;
 let pendingFrames = 0;
@@ -30,6 +33,71 @@ let lastLandmarkTime = 0;
 
 function distance2D(pointA, pointB) {
   return Math.hypot(pointA.x - pointB.x, pointA.y - pointB.y);
+}
+
+function loadImageFromUrl(imageUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(`Unable to load image: ${imageUrl}`));
+    image.src = imageUrl;
+  });
+}
+
+function buildDigitTargets(image, count) {
+  const sampleCanvas = document.createElement("canvas");
+  sampleCanvas.width = 220;
+  sampleCanvas.height = 220;
+  const sampleCtx = sampleCanvas.getContext("2d", { willReadFrequently: true });
+  sampleCtx.clearRect(0, 0, sampleCanvas.width, sampleCanvas.height);
+  sampleCtx.drawImage(image, 0, 0, sampleCanvas.width, sampleCanvas.height);
+
+  const imageData = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
+  const candidatePixels = [];
+
+  for (let y = 0; y < sampleCanvas.height; y += 2) {
+    for (let x = 0; x < sampleCanvas.width; x += 2) {
+      const pixelIndex = (y * sampleCanvas.width + x) * 4;
+      const alpha = imageData[pixelIndex + 3];
+      if (alpha < 38) {
+        continue;
+      }
+
+      const brightness =
+        (imageData[pixelIndex] + imageData[pixelIndex + 1] + imageData[pixelIndex + 2]) / (255 * 3);
+
+      candidatePixels.push({ x, y, brightness });
+    }
+  }
+
+  const targets = new Float32Array(count * 3);
+  const tones = new Float32Array(count);
+
+  if (!candidatePixels.length) {
+    for (let index = 0; index < count; index += 1) {
+      const i3 = index * 3;
+      const theta = Math.random() * Math.PI * 2;
+      const radius = THREE.MathUtils.randFloat(0.6, 2.4);
+      targets[i3] = Math.cos(theta) * radius;
+      targets[i3 + 1] = Math.sin(theta) * radius;
+      targets[i3 + 2] = THREE.MathUtils.randFloatSpread(1.2);
+      tones[index] = Math.random();
+    }
+    return { targets, tones };
+  }
+
+  for (let index = 0; index < count; index += 1) {
+    const sample = candidatePixels[Math.floor(Math.random() * candidatePixels.length)];
+    const i3 = index * 3;
+    const normalizedX = sample.x / sampleCanvas.width - 0.5;
+    const normalizedY = 0.5 - sample.y / sampleCanvas.height;
+    targets[i3] = normalizedX * 7.8;
+    targets[i3 + 1] = normalizedY * 7.8;
+    targets[i3 + 2] = THREE.MathUtils.randFloatSpread(0.8);
+    tones[index] = sample.brightness;
+  }
+
+  return { targets, tones };
 }
 
 function isFingerExtended(landmarks, tipIndex, pipIndex, mcpIndex) {
@@ -86,16 +154,59 @@ function createDigitPng(digit) {
   return canvas.toDataURL("image/png");
 }
 
+function checkCustomDigitUrl(digit) {
+  if (customDigitChecks.has(digit)) {
+    return customDigitChecks.get(digit);
+  }
+
+  const customUrl = `${CUSTOM_DIGIT_FOLDER}/${digit}.png`;
+  const checkPromise = fetch(customUrl, { cache: "no-store" })
+    .then((response) => {
+      if (!response.ok) {
+        return null;
+      }
+      return customUrl;
+    })
+    .catch(() => null);
+
+  customDigitChecks.set(digit, checkPromise);
+  return checkPromise;
+}
+
 function ensureDigitTexture(digit) {
   if (digitTextures.has(digit)) {
     return digitTextures.get(digit);
   }
 
   const imageUrl = createDigitPng(digit);
-  const texture = new THREE.TextureLoader().load(imageUrl);
+  const texture = textureLoader.load(imageUrl);
   texture.colorSpace = THREE.SRGBColorSpace;
-  digitTextures.set(digit, { imageUrl, texture });
-  return digitTextures.get(digit);
+  const entry = { imageUrl, texture };
+  digitTextures.set(digit, entry);
+
+  checkCustomDigitUrl(digit).then((customUrl) => {
+    if (!customUrl) {
+      return;
+    }
+
+    textureLoader.load(
+      customUrl,
+      (customTexture) => {
+        customTexture.colorSpace = THREE.SRGBColorSpace;
+        entry.imageUrl = customUrl;
+        entry.texture = customTexture;
+
+        if (currentDigit === digit || (currentDigit === null && digit === 0)) {
+          digitPreviewEl.src = customUrl;
+          sceneController.setDigitTexture(digit, customTexture, customUrl);
+        }
+      },
+      undefined,
+      () => {}
+    );
+  });
+
+  return entry;
 }
 
 function classifyDigit(landmarks) {
@@ -186,12 +297,12 @@ function updateGesture(digit) {
 
   currentDigit = digit;
   gestureValueEl.textContent = String(digit);
-  gestureHintEl.textContent = "Gesture locked. Keep moving to swap PNG sets in the particle field.";
+  gestureHintEl.textContent = "Digit locked. Hold steady to keep the countdown shape stable.";
   trackingStateEl.textContent = "Hand tracked";
   const { imageUrl, texture } = ensureDigitTexture(digit);
   digitPreviewEl.src = imageUrl;
   digitPreviewEl.dataset.loaded = "true";
-  sceneController.setDigitTexture(texture);
+  sceneController.setDigitTexture(digit, texture, imageUrl);
 }
 
 function resetGestureStatus() {
@@ -213,71 +324,136 @@ class ParticleSceneController {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(36, 1, 0.1, 100);
-    this.camera.position.set(0, 0, 10.8);
+    this.camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
+    this.camera.position.set(0, 0, 14);
+
+    this.particleCount = 2200;
+    this.particlePositions = new Float32Array(this.particleCount * 3);
+    this.particleVelocities = new Float32Array(this.particleCount * 3);
+    this.particleTargets = new Float32Array(this.particleCount * 3);
+    this.particleColors = new Float32Array(this.particleCount * 3);
+    this.paletteA = new THREE.Color(DIGIT_COLORS[0][0]);
+    this.paletteB = new THREE.Color(DIGIT_COLORS[0][1]);
+    this.morphToken = 0;
 
     this.scene.add(new THREE.AmbientLight(0xffffff, 1.2));
 
-    const rimLight = new THREE.PointLight(0x7cf5c0, 18, 40, 2);
-    rimLight.position.set(-3, 2, 8);
+    const rimLight = new THREE.PointLight(0x7cf5c0, 14, 40, 2);
+    rimLight.position.set(-4.4, 3, 10);
     this.scene.add(rimLight);
 
-    const warmLight = new THREE.PointLight(0xffb57d, 20, 40, 2);
-    warmLight.position.set(3.6, -1.5, 7.5);
+    const warmLight = new THREE.PointLight(0xffb57d, 16, 40, 2);
+    warmLight.position.set(4.2, -2.1, 10);
     this.scene.add(warmLight);
 
-    this.mainSprite = new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        color: 0xffffff,
-        transparent: true,
-        opacity: 0.96,
-        depthWrite: false
-      })
-    );
-    this.mainSprite.scale.set(3.3, 3.3, 1);
-    this.mainSprite.position.set(0, 0, 0);
-    this.scene.add(this.mainSprite);
-
-    this.particleGroup = new THREE.Group();
-    this.particles = [];
-    this.scene.add(this.particleGroup);
-
-    for (let index = 0; index < 160; index += 1) {
-      const sprite = new THREE.Sprite(
-        new THREE.SpriteMaterial({
-          color: 0xffffff,
-          transparent: true,
-          opacity: 0.75,
-          depthWrite: false
-        })
-      );
-      const orbitRadius = THREE.MathUtils.randFloat(2.4, 5.8);
-      const orbitSpeed = THREE.MathUtils.randFloat(0.2, 0.8);
-      const orbitPhase = THREE.MathUtils.randFloat(0, Math.PI * 2);
-      const lift = THREE.MathUtils.randFloat(-2.8, 2.8);
-      const wobble = THREE.MathUtils.randFloat(0.2, 1.1);
-      const baseScale = THREE.MathUtils.randFloat(0.18, 0.68);
-
-      sprite.scale.set(baseScale, baseScale, 1);
-      this.particleGroup.add(sprite);
-      this.particles.push({ sprite, orbitRadius, orbitSpeed, orbitPhase, lift, wobble, baseScale });
+    this.digitGeometry = new THREE.BufferGeometry();
+    for (let index = 0; index < this.particleCount; index += 1) {
+      const i3 = index * 3;
+      this.particlePositions[i3] = THREE.MathUtils.randFloatSpread(12);
+      this.particlePositions[i3 + 1] = THREE.MathUtils.randFloatSpread(12);
+      this.particlePositions[i3 + 2] = THREE.MathUtils.randFloatSpread(3);
+      this.particleTargets[i3] = this.particlePositions[i3];
+      this.particleTargets[i3 + 1] = this.particlePositions[i3 + 1];
+      this.particleTargets[i3 + 2] = this.particlePositions[i3 + 2];
+      this.particleColors[i3] = 1;
+      this.particleColors[i3 + 1] = 1;
+      this.particleColors[i3 + 2] = 1;
     }
 
+    this.digitGeometry.setAttribute("position", new THREE.BufferAttribute(this.particlePositions, 3));
+    this.digitGeometry.setAttribute("color", new THREE.BufferAttribute(this.particleColors, 3));
+    this.digitMaterial = new THREE.PointsMaterial({
+      size: 0.1,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.9,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      sizeAttenuation: true
+    });
+    this.digitPoints = new THREE.Points(this.digitGeometry, this.digitMaterial);
+    this.scene.add(this.digitPoints);
+
+    this.bgParticleCount = 560;
+    this.bgPositions = new Float32Array(this.bgParticleCount * 3);
+    this.bgColors = new Float32Array(this.bgParticleCount * 3);
+    this.bgSeeds = [];
+    this.bgGeometry = new THREE.BufferGeometry();
+
+    for (let index = 0; index < this.bgParticleCount; index += 1) {
+      const i3 = index * 3;
+      this.bgPositions[i3] = 0;
+      this.bgPositions[i3 + 1] = 0;
+      this.bgPositions[i3 + 2] = 0;
+      const mix = Math.random();
+      this.bgColors[i3] = 0.2 + mix * 0.3;
+      this.bgColors[i3 + 1] = 0.45 + mix * 0.35;
+      this.bgColors[i3 + 2] = 0.65 + mix * 0.25;
+      this.bgSeeds.push({
+        radius: THREE.MathUtils.randFloat(4.5, 9.5),
+        speed: THREE.MathUtils.randFloat(0.15, 0.9),
+        phase: THREE.MathUtils.randFloat(0, Math.PI * 2),
+        lift: THREE.MathUtils.randFloat(-4.2, 4.2),
+        wobble: THREE.MathUtils.randFloat(0.25, 1.2)
+      });
+    }
+
+    this.bgGeometry.setAttribute("position", new THREE.BufferAttribute(this.bgPositions, 3));
+    this.bgGeometry.setAttribute("color", new THREE.BufferAttribute(this.bgColors, 3));
+    this.bgMaterial = new THREE.PointsMaterial({
+      size: 0.07,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true
+    });
+    this.bgPoints = new THREE.Points(this.bgGeometry, this.bgMaterial);
+    this.scene.add(this.bgPoints);
+
     this.clock = new THREE.Clock();
-    this.setDigitTexture(ensureDigitTexture(0).texture);
     this.handleResize();
     window.addEventListener("resize", () => this.handleResize());
+
+    const initialEntry = ensureDigitTexture(0);
+    this.setDigitTexture(0, initialEntry.texture, initialEntry.imageUrl);
     this.animate();
   }
 
-  setDigitTexture(texture) {
-    this.mainSprite.material.map = texture;
-    this.mainSprite.material.needsUpdate = true;
+  async setDigitTexture(digit, texture, imageUrl) {
+    this.paletteA.set(DIGIT_COLORS[digit][0]);
+    this.paletteB.set(DIGIT_COLORS[digit][1]);
+    const currentToken = ++this.morphToken;
 
-    for (const particle of this.particles) {
-      particle.sprite.material.map = texture;
-      particle.sprite.material.needsUpdate = true;
+    let image = texture?.image;
+    if (!image || !image.width) {
+      try {
+        image = await loadImageFromUrl(imageUrl);
+      } catch {
+        image = null;
+      }
     }
+
+    if (!image || currentToken !== this.morphToken) {
+      return;
+    }
+
+    const { targets, tones } = buildDigitTargets(image, this.particleCount);
+    this.particleTargets.set(targets);
+
+    for (let index = 0; index < this.particleCount; index += 1) {
+      const i3 = index * 3;
+      const tone = tones[index];
+      this.particleColors[i3] = this.paletteA.r + (this.paletteB.r - this.paletteA.r) * tone;
+      this.particleColors[i3 + 1] = this.paletteA.g + (this.paletteB.g - this.paletteA.g) * tone;
+      this.particleColors[i3 + 2] = this.paletteA.b + (this.paletteB.b - this.paletteA.b) * tone;
+      this.particleVelocities[i3] += THREE.MathUtils.randFloatSpread(0.7);
+      this.particleVelocities[i3 + 1] += THREE.MathUtils.randFloatSpread(0.7);
+      this.particleVelocities[i3 + 2] += THREE.MathUtils.randFloatSpread(0.4);
+    }
+
+    this.digitGeometry.attributes.color.needsUpdate = true;
   }
 
   handleResize() {
@@ -291,23 +467,42 @@ class ParticleSceneController {
 
   animate = () => {
     const elapsed = this.clock.getElapsedTime();
-    this.mainSprite.material.rotation = elapsed * 0.14;
-    this.mainSprite.position.y = Math.sin(elapsed * 1.1) * 0.18;
 
-    for (const particle of this.particles) {
-      const angle = elapsed * particle.orbitSpeed + particle.orbitPhase;
-      particle.sprite.position.set(
-        Math.cos(angle) * particle.orbitRadius,
-        particle.lift + Math.sin(angle * 1.7) * particle.wobble,
-        Math.sin(angle * 0.75) * 1.2
-      );
-      particle.sprite.material.opacity = 0.35 + (Math.sin(angle * 2.3) + 1) * 0.22;
-      const pulse = 0.86 + (Math.sin(angle * 3.4) + 1) * 0.12;
-      particle.sprite.scale.setScalar(particle.baseScale * pulse + particle.orbitRadius * 0.04);
+    for (let index = 0; index < this.particleCount; index += 1) {
+      const i3 = index * 3;
+      const x = this.particlePositions[i3];
+      const y = this.particlePositions[i3 + 1];
+      const z = this.particlePositions[i3 + 2];
+
+      const tx = this.particleTargets[i3] + Math.sin(elapsed * 2.2 + index * 0.021) * 0.08;
+      const ty = this.particleTargets[i3 + 1] + Math.cos(elapsed * 2 + index * 0.017) * 0.08;
+      const tz = this.particleTargets[i3 + 2] + Math.sin(elapsed * 1.7 + index * 0.012) * 0.11;
+
+      this.particleVelocities[i3] = (this.particleVelocities[i3] + (tx - x) * 0.07) * 0.86;
+      this.particleVelocities[i3 + 1] = (this.particleVelocities[i3 + 1] + (ty - y) * 0.07) * 0.86;
+      this.particleVelocities[i3 + 2] = (this.particleVelocities[i3 + 2] + (tz - z) * 0.04) * 0.83;
+
+      this.particlePositions[i3] += this.particleVelocities[i3];
+      this.particlePositions[i3 + 1] += this.particleVelocities[i3 + 1];
+      this.particlePositions[i3 + 2] += this.particleVelocities[i3 + 2];
     }
 
-    this.particleGroup.rotation.y = elapsed * 0.08;
-    this.particleGroup.rotation.x = Math.sin(elapsed * 0.3) * 0.12;
+    for (let index = 0; index < this.bgParticleCount; index += 1) {
+      const seed = this.bgSeeds[index];
+      const i3 = index * 3;
+      const angle = elapsed * seed.speed + seed.phase;
+      this.bgPositions[i3] = Math.cos(angle) * seed.radius;
+      this.bgPositions[i3 + 1] = seed.lift + Math.sin(angle * 1.9) * seed.wobble;
+      this.bgPositions[i3 + 2] = Math.sin(angle * 0.8) * 2.8;
+    }
+
+    this.digitPoints.rotation.y = Math.sin(elapsed * 0.23) * 0.2;
+    this.digitPoints.rotation.x = Math.cos(elapsed * 0.2) * 0.08;
+    this.bgPoints.rotation.y = elapsed * 0.05;
+    this.bgPoints.rotation.x = Math.sin(elapsed * 0.16) * 0.12;
+
+    this.digitGeometry.attributes.position.needsUpdate = true;
+    this.bgGeometry.attributes.position.needsUpdate = true;
 
     this.renderer.render(this.scene, this.camera);
     requestAnimationFrame(this.animate);
@@ -371,23 +566,53 @@ hands.onResults((results) => {
   drawHandResults(results);
 });
 
-const camera = new Camera(videoElement, {
-  onFrame: async () => {
-    await hands.send({ image: videoElement });
-  },
-  width: 960,
-  height: 720
-});
+videoElement.setAttribute("autoplay", "");
+videoElement.setAttribute("muted", "");
+videoElement.setAttribute("playsinline", "");
+videoElement.muted = true;
+videoElement.playsInline = true;
 
-camera
-  .start()
-  .then(() => {
-    trackingStateEl.textContent = "Camera live";
-  })
-  .catch((error) => {
-    trackingStateEl.textContent = "Camera unavailable";
-    gestureHintEl.textContent = "Camera access failed. Serve this page from localhost or HTTPS and allow permission prompts.";
-    console.error(error);
+async function startCamera() {
+  trackingStateEl.textContent = "Requesting camera";
+
+  try {
+    if (navigator.mediaDevices?.getUserMedia) {
+      const warmupStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 720 } },
+        audio: false
+      });
+      for (const track of warmupStream.getTracks()) {
+        track.stop();
+      }
+    }
+  } catch {
+    // MediaPipe camera may still recover if browser already granted permission previously.
+  }
+
+  const camera = new Camera(videoElement, {
+    onFrame: async () => {
+      try {
+        await hands.send({ image: videoElement });
+      } catch {
+        trackingStateEl.textContent = "Tracking paused";
+      }
+    },
+    width: 960,
+    height: 720,
+    facingMode: "user"
   });
+
+  try {
+    await camera.start();
+    trackingStateEl.textContent = "Camera live";
+    gestureHintEl.textContent = "Show one hand with a clear number gesture from 0 to 9.";
+  } catch (error) {
+    trackingStateEl.textContent = "Camera unavailable";
+    gestureHintEl.textContent = "Camera start failed. Use localhost/HTTPS, grant permission, and verify no other app is locking the camera.";
+    console.error(error);
+  }
+}
+
+startCamera();
 
 window.setInterval(resetGestureStatus, 250);

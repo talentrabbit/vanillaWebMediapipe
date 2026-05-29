@@ -11,26 +11,20 @@
 </head>
 <body>
   <div class="app-shell">
-    <section class="hero-panel">
-      <div class="hero-copy">
-        <p class="eyebrow">Hand Gesture PNG Visualizer</p>
-        <h1>Show digits with your hand and turn them into living particles.</h1>
-        <p class="hero-text">
-          This demo uses MediaPipe Hands for real-time landmark tracking and Three.js sprites to transform each detected number into a floating PNG particle field.
-        </p>
-      </div>
+    <section class="intro-strip">
+      <p>Show one hand digit (0-9), keep it steady, and the particle field will morph into that number.</p>
+    </section>
 
-      <div class="status-grid">
-        <article class="status-card">
-          <span class="status-label">Detected digit</span>
-          <strong id="gestureValue">--</strong>
-          <p id="gestureHint">Allow camera access and hold one digit steady for a moment.</p>
-        </article>
-        <article class="status-card preview-card">
-          <span class="status-label">Current PNG</span>
-          <img id="digitPreview" alt="Detected digit preview" />
-        </article>
-      </div>
+    <section class="status-strip">
+      <article class="status-card">
+        <span class="status-label">Detected digit</span>
+        <strong id="gestureValue">--</strong>
+        <p id="gestureHint">Allow camera access and hold one digit steady for a moment.</p>
+      </article>
+      <article class="status-card preview-card">
+        <span class="status-label">Current PNG</span>
+        <img id="digitPreview" alt="Detected digit preview" />
+      </article>
     </section>
 
     <section class="stage-panel">
@@ -48,7 +42,7 @@
       <div class="scene-card">
         <div class="scene-header">
           <span>Three.js particle renderer</span>
-          <span>PNG sprites + motion field</span>
+          <span>Dynamic number particles</span>
         </div>
         <canvas id="sceneCanvas"></canvas>
       </div>

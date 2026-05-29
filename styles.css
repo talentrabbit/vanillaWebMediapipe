@@ -56,13 +56,13 @@ body::after {
 .app-shell {
   position: relative;
   display: grid;
-  gap: 1.5rem;
+  gap: 1rem;
   max-width: 1440px;
   margin: 0 auto;
   padding: 2rem;
 }
 
-.hero-panel,
+.intro-strip,
 .camera-card,
 .scene-card,
 .status-card {
@@ -72,15 +72,14 @@ body::after {
   backdrop-filter: blur(18px);
 }
 
-.hero-panel {
-  display: grid;
-  gap: 1.5rem;
-  grid-template-columns: minmax(0, 1.7fr) minmax(320px, 0.9fr);
-  border-radius: 32px;
-  padding: 1.75rem;
+.intro-strip {
+  border-radius: 24px;
+  padding: 0.9rem 1.1rem;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: var(--muted);
 }
 
-.eyebrow,
 .status-label,
 .camera-header,
 .scene-header {
@@ -89,53 +88,44 @@ body::after {
   font-size: 0.76rem;
   color: var(--muted);
 }
-
-.hero-copy h1 {
-  margin: 0.5rem 0 0.75rem;
-  max-width: 12ch;
-  font-family: "Sora", sans-serif;
-  font-size: clamp(2.4rem, 5vw, 4.9rem);
-  line-height: 0.98;
-}
-
-.hero-text,
 #gestureHint {
   margin: 0;
-  max-width: 58ch;
-  font-size: 1rem;
-  line-height: 1.6;
+  font-size: 0.87rem;
+  line-height: 1.45;
   color: var(--muted);
 }
 
-.status-grid {
+.status-strip {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 220px);
   gap: 1rem;
 }
 
 .status-card {
-  min-height: 174px;
-  border-radius: 24px;
-  padding: 1.2rem;
+  min-height: 126px;
+  border-radius: 18px;
+  padding: 0.8rem 0.9rem;
 }
 
 .status-card strong {
   display: block;
-  margin: 0.65rem 0 0.25rem;
+  margin: 0.45rem 0 0.2rem;
   font-family: "Sora", sans-serif;
-  font-size: clamp(2.8rem, 8vw, 4.6rem);
+  font-size: clamp(2rem, 6vw, 2.8rem);
   line-height: 1;
 }
 
 .preview-card {
   display: grid;
-  align-content: start;
+  align-content: center;
+  justify-items: center;
 }
 
 #digitPreview {
-  width: min(100%, 180px);
+  width: min(100%, 112px);
   aspect-ratio: 1;
-  margin-top: 0.9rem;
-  border-radius: 24px;
+  margin-top: 0.5rem;
+  border-radius: 16px;
   background: linear-gradient(145deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
   object-fit: contain;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
@@ -212,7 +202,7 @@ body::after {
   }
 }
 
-.hero-panel,
+.intro-strip,
 .camera-card,
 .scene-card {
   animation: riseIn 700ms ease both;
@@ -227,7 +217,7 @@ body::after {
 }
 
 @media (max-width: 1080px) {
-  .hero-panel,
+  .status-strip,
   .stage-panel {
     grid-template-columns: 1fr;
   }
@@ -246,15 +236,11 @@ body::after {
     padding: 1rem;
   }
 
-  .hero-panel,
+  .intro-strip,
   .camera-card,
   .scene-card,
   .status-card {
     border-radius: 22px;
-  }
-
-  .hero-panel {
-    padding: 1.1rem;
   }
 
   .camera-card,
