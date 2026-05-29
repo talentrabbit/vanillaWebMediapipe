@@ -1,0 +1,272 @@
+:root {
+  color-scheme: dark;
+  --bg-top: #08111f;
+  --bg-bottom: #15263b;
+  --card: rgba(8, 17, 31, 0.64);
+  --card-border: rgba(144, 198, 255, 0.22);
+  --text: #f4f7fb;
+  --muted: #9eb4cb;
+  --accent: #7cf5c0;
+  --accent-warm: #ffbc7d;
+  --glow: rgba(124, 245, 192, 0.28);
+  --shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Space Grotesk", sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(124, 245, 192, 0.14), transparent 32%),
+    radial-gradient(circle at bottom right, rgba(255, 188, 125, 0.18), transparent 28%),
+    linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+}
+
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  inset: auto;
+  border-radius: 999px;
+  filter: blur(90px);
+  pointer-events: none;
+}
+
+body::before {
+  width: 240px;
+  height: 240px;
+  top: 3rem;
+  right: 4rem;
+  background: rgba(124, 245, 192, 0.22);
+}
+
+body::after {
+  width: 300px;
+  height: 300px;
+  left: -4rem;
+  bottom: -5rem;
+  background: rgba(92, 140, 255, 0.18);
+}
+
+.app-shell {
+  position: relative;
+  display: grid;
+  gap: 1.5rem;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.hero-panel,
+.camera-card,
+.scene-card,
+.status-card {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+}
+
+.hero-panel {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: minmax(0, 1.7fr) minmax(320px, 0.9fr);
+  border-radius: 32px;
+  padding: 1.75rem;
+}
+
+.eyebrow,
+.status-label,
+.camera-header,
+.scene-header {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.hero-copy h1 {
+  margin: 0.5rem 0 0.75rem;
+  max-width: 12ch;
+  font-family: "Sora", sans-serif;
+  font-size: clamp(2.4rem, 5vw, 4.9rem);
+  line-height: 0.98;
+}
+
+.hero-text,
+#gestureHint {
+  margin: 0;
+  max-width: 58ch;
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.status-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.status-card {
+  min-height: 174px;
+  border-radius: 24px;
+  padding: 1.2rem;
+}
+
+.status-card strong {
+  display: block;
+  margin: 0.65rem 0 0.25rem;
+  font-family: "Sora", sans-serif;
+  font-size: clamp(2.8rem, 8vw, 4.6rem);
+  line-height: 1;
+}
+
+.preview-card {
+  display: grid;
+  align-content: start;
+}
+
+#digitPreview {
+  width: min(100%, 180px);
+  aspect-ratio: 1;
+  margin-top: 0.9rem;
+  border-radius: 24px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
+  object-fit: contain;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.stage-panel {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.95fr) minmax(0, 1.25fr);
+  gap: 1.5rem;
+}
+
+.camera-card,
+.scene-card {
+  border-radius: 28px;
+  padding: 1rem;
+}
+
+.camera-header,
+.scene-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.85rem;
+}
+
+.camera-stack {
+  position: relative;
+  overflow: hidden;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.04);
+  aspect-ratio: 3 / 4;
+}
+
+.input-video,
+.output-canvas,
+#sceneCanvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.input-video,
+.output-canvas {
+  position: absolute;
+  inset: 0;
+  object-fit: cover;
+}
+
+.input-video {
+  opacity: 0;
+  transform: scaleX(-1);
+}
+
+.scene-card {
+  min-height: 620px;
+}
+
+#sceneCanvas {
+  min-height: 560px;
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at center, rgba(24, 39, 62, 0.7), rgba(3, 8, 15, 0.96));
+}
+
+@keyframes riseIn {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hero-panel,
+.camera-card,
+.scene-card {
+  animation: riseIn 700ms ease both;
+}
+
+.camera-card {
+  animation-delay: 90ms;
+}
+
+.scene-card {
+  animation-delay: 160ms;
+}
+
+@media (max-width: 1080px) {
+  .hero-panel,
+  .stage-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .scene-card {
+    min-height: 520px;
+  }
+
+  #sceneCanvas {
+    min-height: 460px;
+  }
+}
+
+@media (max-width: 720px) {
+  .app-shell {
+    padding: 1rem;
+  }
+
+  .hero-panel,
+  .camera-card,
+  .scene-card,
+  .status-card {
+    border-radius: 22px;
+  }
+
+  .hero-panel {
+    padding: 1.1rem;
+  }
+
+  .camera-card,
+  .scene-card {
+    padding: 0.8rem;
+  }
+
+  .scene-card {
+    min-height: 420px;
+  }
+
+  #sceneCanvas {
+    min-height: 360px;
+  }
+}
