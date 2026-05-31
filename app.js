@@ -4,6 +4,9 @@ const videoElement = document.querySelector(".input-video");
 const handCanvas = document.querySelector(".output-canvas");
 const handCanvasCtx = handCanvas.getContext("2d");
 const sceneCanvas = document.querySelector("#sceneCanvas");
+const stagePanelEl = document.querySelector(".stage-panel");
+const cameraCardEl = document.querySelector(".camera-card");
+const cameraHeaderEl = document.querySelector(".camera-header");
 const sceneCardEl = document.querySelector(".scene-card");
 const toggleCaptureButton = document.querySelector("#toggleCaptureButton");
 const toggleSceneFullscreenButton = document.querySelector("#toggleSceneFullscreen");
@@ -15,7 +18,6 @@ const gestureTrainerGridEl = document.querySelector("#gestureTrainerGrid");
 const trainerPanelBodyEl = document.querySelector("#trainerPanelBody");
 const toggleTrainerPanelButton = document.querySelector("#toggleTrainerPanel");
 const exportCustomGesturesButton = document.querySelector("#exportCustomGestures");
-const saveRepoPreloadButton = document.querySelector("#saveRepoPreload");
 const importCustomGesturesButton = document.querySelector("#importCustomGestures");
 const importCustomGesturesInput = document.querySelector("#importCustomGesturesInput");
 const resetCustomGesturesButton = document.querySelector("#resetCustomGestures");
@@ -52,6 +54,10 @@ let cameraState = "idle";
 let latestGestureVector = null;
 let isTrainerPanelCollapsed = false;
 let customGestureLibrary = loadStoredGestureLibrary();
+let isDraggingFloatingCamera = false;
+let isFloatingCameraVisible = true;
+let floatingCameraOffset = { x: 0, y: 0 };
+let floatingCameraPosition = { x: 24, y: 24 };
 const gestureChangeSound = new Audio(GESTURE_CHANGE_SOUND_URL);
 gestureChangeSound.preload = "auto";
 gestureChangeSound.volume = 0.72;
@@ -226,39 +232,6 @@ function exportGestureLibrary() {
   trainerHintEl.textContent = "Exported gesture samples to gesture-samples.json.";
 }
 
-async function saveGestureLibraryAsRepoPreload() {
-  const payload = createGestureLibraryFilePayload(false);
-
-  try {
-    if (window.showSaveFilePicker) {
-      const fileHandle = await window.showSaveFilePicker({
-        suggestedName: "gesture-samples.json",
-        types: [
-          {
-            description: "JSON files",
-            accept: {
-              "application/json": [".json"]
-            }
-          }
-        ]
-      });
-      const writable = await fileHandle.createWritable();
-      await writable.write(JSON.stringify(payload, null, 2));
-      await writable.close();
-      trainerHintEl.textContent = "Saved repo preload JSON. Place it at assets/gesture-samples.json if you picked another folder.";
-      return;
-    }
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      trainerHintEl.textContent = "Repo preload save was cancelled.";
-      return;
-    }
-  }
-
-  downloadJsonFile("gesture-samples.json", payload);
-  trainerHintEl.textContent = "Downloaded repo preload JSON. Move it to assets/gesture-samples.json in this repo.";
-}
-
 function importGestureLibraryFromText(fileText) {
   const parsed = JSON.parse(fileText);
   const gestures = parsed?.gestures ?? parsed;
@@ -417,7 +390,8 @@ function classifyRecognizedDigit(landmarks, gestureVector) {
 function updateTrainerPanelVisibility() {
   trainerPanelBodyEl.classList.toggle("is-collapsed", isTrainerPanelCollapsed);
   toggleTrainerPanelButton.setAttribute("aria-expanded", String(!isTrainerPanelCollapsed));
-  toggleTrainerPanelButton.textContent = isTrainerPanelCollapsed ? "Expand trainer" : "Collapse trainer";
+  toggleTrainerPanelButton.textContent = isTrainerPanelCollapsed ? "+" : "-";
+  toggleTrainerPanelButton.setAttribute("aria-label", isTrainerPanelCollapsed ? "Expand trainer panel" : "Collapse trainer panel");
 }
 
 function toggleTrainerPanel() {
@@ -518,7 +492,6 @@ function initializeGestureTrainer() {
   gestureTrainerGridEl.append(fragment);
   toggleTrainerPanelButton.addEventListener("click", toggleTrainerPanel);
   exportCustomGesturesButton.addEventListener("click", exportGestureLibrary);
-  saveRepoPreloadButton.addEventListener("click", saveGestureLibraryAsRepoPreload);
   importCustomGesturesButton.addEventListener("click", triggerGestureImport);
   importCustomGesturesInput.addEventListener("change", handleGestureImport);
   resetCustomGesturesButton.addEventListener("click", resetAllGestureTemplates);
@@ -849,11 +822,130 @@ function resetGestureStatus() {
   }
 }
 
+function clampFloatingCameraPosition() {
+  const bounds = sceneCardEl.getBoundingClientRect();
+  const cameraBounds = cameraCardEl.getBoundingClientRect();
+  const maxX = Math.max(16, bounds.width - cameraBounds.width - 16);
+  const maxY = Math.max(16, bounds.height - cameraBounds.height - 16);
+  floatingCameraPosition.x = THREE.MathUtils.clamp(floatingCameraPosition.x, 16, maxX);
+  floatingCameraPosition.y = THREE.MathUtils.clamp(floatingCameraPosition.y, 16, maxY);
+}
+
+function applyFloatingCameraPosition() {
+  cameraCardEl.style.left = `${floatingCameraPosition.x}px`;
+  cameraCardEl.style.top = `${floatingCameraPosition.y}px`;
+}
+
+function updateFloatingCameraVisibility() {
+  const isFullscreen = document.fullscreenElement === sceneCardEl;
+  cameraCardEl.classList.toggle("is-hidden", isFullscreen && !isFloatingCameraVisible);
+}
+
+function moveCameraIntoFullscreenOverlay() {
+  if (cameraCardEl.parentElement === sceneCardEl) {
+    clampFloatingCameraPosition();
+    applyFloatingCameraPosition();
+    updateFloatingCameraVisibility();
+    return;
+  }
+
+  sceneCardEl.append(cameraCardEl);
+  cameraCardEl.classList.add("is-floating");
+  clampFloatingCameraPosition();
+  applyFloatingCameraPosition();
+  updateFloatingCameraVisibility();
+}
+
+function restoreCameraToStagePanel() {
+  if (cameraCardEl.parentElement === stagePanelEl) {
+    return;
+  }
+
+  stagePanelEl.insertBefore(cameraCardEl, sceneCardEl);
+  cameraCardEl.classList.remove("is-floating");
+  cameraCardEl.classList.remove("is-hidden");
+  cameraCardEl.style.left = "";
+  cameraCardEl.style.top = "";
+}
+
+function handleFloatingCameraPointerDown(event) {
+  if (document.fullscreenElement !== sceneCardEl) {
+    return;
+  }
+
+  if (event.target instanceof HTMLElement && event.target.closest("button")) {
+    return;
+  }
+
+  isDraggingFloatingCamera = true;
+  const bounds = cameraCardEl.getBoundingClientRect();
+  floatingCameraOffset.x = event.clientX - bounds.left;
+  floatingCameraOffset.y = event.clientY - bounds.top;
+  cameraCardEl.classList.add("is-dragging");
+  cameraHeaderEl.setPointerCapture(event.pointerId);
+}
+
+function handleFloatingCameraPointerMove(event) {
+  if (!isDraggingFloatingCamera || document.fullscreenElement !== sceneCardEl) {
+    return;
+  }
+
+  const sceneBounds = sceneCardEl.getBoundingClientRect();
+  floatingCameraPosition.x = event.clientX - sceneBounds.left - floatingCameraOffset.x;
+  floatingCameraPosition.y = event.clientY - sceneBounds.top - floatingCameraOffset.y;
+  clampFloatingCameraPosition();
+  applyFloatingCameraPosition();
+}
+
+function stopFloatingCameraDrag(event) {
+  if (!isDraggingFloatingCamera) {
+    return;
+  }
+
+  isDraggingFloatingCamera = false;
+  cameraCardEl.classList.remove("is-dragging");
+  if (event?.pointerId !== undefined && cameraHeaderEl.hasPointerCapture(event.pointerId)) {
+    cameraHeaderEl.releasePointerCapture(event.pointerId);
+  }
+}
+
+function toggleFloatingCameraVisibility() {
+  if (document.fullscreenElement !== sceneCardEl) {
+    return;
+  }
+
+  isFloatingCameraVisible = !isFloatingCameraVisible;
+  stopFloatingCameraDrag();
+  updateFloatingCameraVisibility();
+}
+
+function handlePresentationHotkeys(event) {
+  if (document.fullscreenElement !== sceneCardEl) {
+    return;
+  }
+
+  if (!(event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === "d")) {
+    return;
+  }
+
+  event.preventDefault();
+  toggleFloatingCameraVisibility();
+}
+
 function updateSceneFullscreenUi() {
   const isFullscreen = document.fullscreenElement === sceneCardEl;
   sceneCardEl.classList.toggle("is-fullscreen", isFullscreen);
   toggleSceneFullscreenButton.textContent = isFullscreen ? "Exit fullscreen" : "Fullscreen";
   toggleSceneFullscreenButton.setAttribute("aria-pressed", String(isFullscreen));
+
+  if (isFullscreen) {
+    moveCameraIntoFullscreenOverlay();
+    return;
+  }
+
+  isFloatingCameraVisible = true;
+  stopFloatingCameraDrag();
+  restoreCameraToStagePanel();
 }
 
 async function toggleSceneFullscreen() {
@@ -1054,9 +1146,20 @@ initializeGestureTrainer();
 preloadGestureLibraryFromAssets();
 toggleSceneFullscreenButton.addEventListener("click", toggleSceneFullscreen);
 sceneCanvas.addEventListener("dblclick", toggleSceneFullscreen);
+cameraHeaderEl.addEventListener("pointerdown", handleFloatingCameraPointerDown);
+cameraHeaderEl.addEventListener("pointermove", handleFloatingCameraPointerMove);
+cameraHeaderEl.addEventListener("pointerup", stopFloatingCameraDrag);
+cameraHeaderEl.addEventListener("pointercancel", stopFloatingCameraDrag);
+document.addEventListener("keydown", handlePresentationHotkeys);
 document.addEventListener("fullscreenchange", () => {
   updateSceneFullscreenUi();
   sceneController.handleResize();
+});
+window.addEventListener("resize", () => {
+  if (document.fullscreenElement === sceneCardEl && cameraCardEl.classList.contains("is-floating")) {
+    clampFloatingCameraPosition();
+    applyFloatingCameraPosition();
+  }
 });
 updateSceneFullscreenUi();
 

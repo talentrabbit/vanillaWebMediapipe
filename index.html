@@ -29,15 +29,14 @@
           <div class="trainer-toolbar-main">
             <span class="status-label">Custom Gesture Trainer</span>
           </div>
+          <button id="toggleTrainerPanel" class="trainer-expander" type="button" aria-expanded="true" aria-controls="trainerPanelBody" aria-label="Collapse trainer panel">-</button>
+        </div>
+        <div id="trainerPanelBody" class="trainer-panel-body">
           <div class="trainer-toolbar-actions">
-            <button id="toggleTrainerPanel" class="ghost-button" type="button" aria-expanded="true">Collapse trainer</button>
             <button id="exportCustomGestures" class="ghost-button" type="button">Export gestures</button>
-            <button id="saveRepoPreload" class="ghost-button" type="button">Save as repo preload</button>
             <button id="importCustomGestures" class="ghost-button" type="button">Import gestures</button>
             <button id="resetCustomGestures" class="ghost-button" type="button">Reset all gestures</button>
           </div>
-        </div>
-        <div id="trainerPanelBody" class="trainer-panel-body">
           <p id="trainerHint">Hold a pose in frame, then save it to a digit. Saved gestures stay in this browser.</p>
           <div id="gestureTrainerGrid" class="gesture-trainer-grid"></div>
         </div>

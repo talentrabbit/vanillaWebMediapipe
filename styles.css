@@ -114,7 +114,7 @@ body::after {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
-  align-items: flex-start;
+  align-items: center;
 }
 
 .trainer-toolbar-main {
@@ -122,8 +122,31 @@ body::after {
 }
 
 .trainer-toolbar-actions {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: 0.6rem;
+}
+
+.trainer-expander {
+  width: 2.3rem;
+  height: 2.3rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font: 700 1.3rem/1 "Sora", sans-serif;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.trainer-expander:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.26);
+}
+
+.trainer-expander:active {
+  transform: translateY(1px);
 }
 
 .trainer-panel-body {
@@ -244,12 +267,20 @@ body::after {
   padding: 1rem;
 }
 
+.camera-card {
+  position: relative;
+}
+
 .camera-header,
 .scene-header {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 0.85rem;
+}
+
+.camera-header {
+  cursor: default;
 }
 
 .scene-header-actions {
@@ -305,7 +336,40 @@ body::after {
 }
 
 .scene-card {
+  position: relative;
   min-height: 620px;
+}
+
+.camera-card.is-floating {
+  position: absolute;
+  top: 24px;
+  left: 24px;
+  width: min(360px, calc(100vw - 32px));
+  min-width: 280px;
+  min-height: 0;
+  margin: 0;
+  z-index: 6;
+  background: rgba(8, 17, 31, 0.82);
+  border-color: rgba(144, 198, 255, 0.34);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.48);
+  touch-action: none;
+}
+
+.camera-card.is-floating.is-hidden {
+  display: none;
+}
+
+.camera-card.is-floating .camera-header {
+  cursor: grab;
+  user-select: none;
+}
+
+.camera-card.is-floating.is-dragging .camera-header {
+  cursor: grabbing;
+}
+
+.camera-card.is-floating .camera-stack {
+  aspect-ratio: 4 / 3;
 }
 
 .scene-card:fullscreen,
@@ -412,6 +476,10 @@ body::after {
   .trainer-toolbar,
   .gesture-slot-actions {
     flex-direction: column;
+  }
+
+  .trainer-toolbar-actions {
+    width: 100%;
   }
 
   .scene-header-actions {
