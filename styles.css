@@ -97,8 +97,125 @@ body::after {
 
 .status-strip {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(180px, 220px);
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
+}
+
+.trainer-card {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 24px;
+  padding: 1rem;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+}
+
+.trainer-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.trainer-toolbar-main {
+  flex: 1;
+}
+
+.trainer-toolbar-actions {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.trainer-panel-body {
+  display: grid;
+  gap: 0.9rem;
+  margin-top: 0.75rem;
+}
+
+.trainer-panel-body.is-collapsed {
+  display: none;
+}
+
+#trainerHint {
+  margin: 0.35rem 0 0;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.ghost-button {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  padding: 0.65rem 0.95rem;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.ghost-button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.26);
+}
+
+.ghost-button:active {
+  transform: translateY(1px);
+}
+
+.gesture-trainer-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.gesture-slot {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.85rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.gesture-slot-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.gesture-slot strong {
+  font-family: "Sora", sans-serif;
+  font-size: 1.1rem;
+}
+
+.gesture-sample-count {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.gesture-slot-actions {
+  display: flex;
+  gap: 0.45rem;
+}
+
+.gesture-slot-actions .ghost-button {
+  flex: 1;
+  padding: 0.55rem 0.7rem;
+  border-radius: 14px;
+  font-size: 0.84rem;
+}
+
+.gesture-slot-actions .danger-button {
+  border-color: rgba(255, 122, 122, 0.3);
+  color: #ffd0d0;
+}
+
+.gesture-slot-state {
+  min-height: 1.2rem;
+  font-size: 0.78rem;
+  color: var(--muted);
 }
 
 .status-card {
@@ -113,22 +230,6 @@ body::after {
   font-family: "Sora", sans-serif;
   font-size: clamp(2rem, 6vw, 2.8rem);
   line-height: 1;
-}
-
-.preview-card {
-  display: grid;
-  align-content: center;
-  justify-items: center;
-}
-
-#digitPreview {
-  width: min(100%, 112px);
-  aspect-ratio: 1;
-  margin-top: 0.5rem;
-  border-radius: 16px;
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
-  object-fit: contain;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
 .stage-panel {
@@ -149,6 +250,30 @@ body::after {
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 0.85rem;
+}
+
+.scene-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.camera-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.camera-toggle-button {
+  padding: 0.5rem 0.85rem;
+  font-size: 0.8rem;
+}
+
+.scene-fullscreen-button {
+  padding: 0.5rem 0.85rem;
+  font-size: 0.8rem;
 }
 
 .camera-stack {
@@ -183,11 +308,35 @@ body::after {
   min-height: 620px;
 }
 
+.scene-card:fullscreen,
+.scene-card.is-fullscreen {
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  min-height: 100vh;
+  padding: 0;
+  border-radius: 0;
+  border: none;
+  background: radial-gradient(circle at center, rgba(24, 39, 62, 0.92), rgba(3, 8, 15, 1));
+}
+
+.scene-card:fullscreen .scene-header,
+.scene-card.is-fullscreen .scene-header {
+  display: none;
+}
+
 #sceneCanvas {
   min-height: 560px;
   border-radius: 22px;
   background:
     radial-gradient(circle at center, rgba(24, 39, 62, 0.7), rgba(3, 8, 15, 0.96));
+}
+
+.scene-card:fullscreen #sceneCanvas,
+.scene-card.is-fullscreen #sceneCanvas {
+  min-height: 100vh;
+  height: 100vh;
+  border-radius: 0;
 }
 
 @keyframes riseIn {
@@ -222,6 +371,10 @@ body::after {
     grid-template-columns: 1fr;
   }
 
+  .gesture-trainer-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .scene-card {
     min-height: 520px;
   }
@@ -254,5 +407,24 @@ body::after {
 
   #sceneCanvas {
     min-height: 360px;
+  }
+
+  .trainer-toolbar,
+  .gesture-slot-actions {
+    flex-direction: column;
+  }
+
+  .scene-header-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .camera-header-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .gesture-trainer-grid {
+    grid-template-columns: 1fr;
   }
 }

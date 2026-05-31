@@ -4,16 +4,27 @@ const videoElement = document.querySelector(".input-video");
 const handCanvas = document.querySelector(".output-canvas");
 const handCanvasCtx = handCanvas.getContext("2d");
 const sceneCanvas = document.querySelector("#sceneCanvas");
+const sceneCardEl = document.querySelector(".scene-card");
+const toggleCaptureButton = document.querySelector("#toggleCaptureButton");
+const toggleSceneFullscreenButton = document.querySelector("#toggleSceneFullscreen");
 const gestureValueEl = document.querySelector("#gestureValue");
 const gestureHintEl = document.querySelector("#gestureHint");
-const digitPreviewEl = document.querySelector("#digitPreview");
 const trackingStateEl = document.querySelector("#trackingState");
+const trainerHintEl = document.querySelector("#trainerHint");
+const gestureTrainerGridEl = document.querySelector("#gestureTrainerGrid");
+const trainerPanelBodyEl = document.querySelector("#trainerPanelBody");
+const toggleTrainerPanelButton = document.querySelector("#toggleTrainerPanel");
+const exportCustomGesturesButton = document.querySelector("#exportCustomGestures");
+const saveRepoPreloadButton = document.querySelector("#saveRepoPreload");
+const importCustomGesturesButton = document.querySelector("#importCustomGestures");
+const importCustomGesturesInput = document.querySelector("#importCustomGesturesInput");
+const resetCustomGesturesButton = document.querySelector("#resetCustomGestures");
 
 const DIGIT_COLORS = [
   ["#7cf5c0", "#3f8cff"],
   ["#ffbc7d", "#ff7b7b"],
   ["#7de7ff", "#4b7dff"],
-  ["#ffd86b", "#ff9d4d"],
+  ["#ffd86b", "#ff9d4d"], 
   ["#f58aff", "#7a7bff"],
   ["#7cf5c0", "#ffbc7d"],
   ["#88f7e2", "#3f8cff"],
@@ -23,13 +34,255 @@ const DIGIT_COLORS = [
 ];
 
 const CUSTOM_DIGIT_FOLDER = "./assets/custom-png";
+const CUSTOM_GESTURES_STORAGE_KEY = "gestureParticles.customGestures.v1";
+const PRELOADED_GESTURES_URL = "./assets/gesture-samples.json";
+const GESTURE_CHANGE_SOUND_URL = "./assets/audio/gesture-change.wav";
 const textureLoader = new THREE.TextureLoader();
 const digitTextures = new Map();
 const customDigitChecks = new Map();
+const trainerSlotElements = new Map();
 let currentDigit = null;
 let pendingDigit = null;
 let pendingFrames = 0;
 let lastLandmarkTime = 0;
+let activeStream = null;
+let isProcessingFrame = false;
+let animationFrameId = 0;
+let cameraState = "idle";
+let latestGestureVector = null;
+let isTrainerPanelCollapsed = false;
+let customGestureLibrary = loadStoredGestureLibrary();
+const gestureChangeSound = new Audio(GESTURE_CHANGE_SOUND_URL);
+gestureChangeSound.preload = "auto";
+gestureChangeSound.volume = 0.72;
+
+function primeGestureChangeSound() {
+  gestureChangeSound.load();
+}
+
+function playGestureChangeSound(digit) {
+  const sound = gestureChangeSound.cloneNode();
+  sound.volume = 0.6 + digit * 0.018;
+  sound.play().catch(() => {});
+}
+
+function updateCaptureButton() {
+  if (cameraState === "requesting") {
+    toggleCaptureButton.textContent = "Starting...";
+    toggleCaptureButton.disabled = true;
+    return;
+  }
+
+  toggleCaptureButton.disabled = false;
+  toggleCaptureButton.textContent = cameraState === "live" ? "Stop capture" : "Start capture";
+}
+
+function stopCamera(options = {}) {
+  const { preserveHint = false } = options;
+
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = 0;
+  }
+
+  if (activeStream) {
+    for (const track of activeStream.getTracks()) {
+      track.stop();
+    }
+    activeStream = null;
+  }
+
+  isProcessingFrame = false;
+  latestGestureVector = null;
+  pendingDigit = null;
+  pendingFrames = 0;
+  lastLandmarkTime = 0;
+  videoElement.pause();
+  videoElement.srcObject = null;
+  handCanvasCtx.clearRect(0, 0, handCanvas.width, handCanvas.height);
+  cameraState = "stopped";
+  trackingStateEl.textContent = "Capture stopped";
+  if (!preserveHint) {
+    gestureHintEl.textContent = "Capture stopped. Start the camera to continue gesture tracking.";
+  }
+  updateCaptureButton();
+}
+
+async function toggleCapture() {
+  primeGestureChangeSound();
+  if (cameraState === "requesting") {
+    return;
+  }
+
+  if (cameraState === "live") {
+    stopCamera();
+    return;
+  }
+
+  await startCamera();
+}
+
+function createEmptyGestureLibrary() {
+  return Object.fromEntries(Array.from({ length: 10 }, (_, digit) => [String(digit), []]));
+}
+
+function normalizeGestureLibrary(candidate) {
+  const normalized = createEmptyGestureLibrary();
+
+  for (let digit = 0; digit <= 9; digit += 1) {
+    const key = String(digit);
+    const samples = Array.isArray(candidate?.[key]) ? candidate[key] : [];
+    normalized[key] = samples.filter((sample) => Array.isArray(sample) && sample.length === 63);
+  }
+
+  return normalized;
+}
+
+function loadStoredGestureLibrary() {
+  try {
+    const stored = window.localStorage.getItem(CUSTOM_GESTURES_STORAGE_KEY);
+    if (!stored) {
+      return createEmptyGestureLibrary();
+    }
+
+    return normalizeGestureLibrary(JSON.parse(stored));
+  } catch {
+    return createEmptyGestureLibrary();
+  }
+}
+
+function hasStoredGestureLibrary() {
+  return Boolean(window.localStorage.getItem(CUSTOM_GESTURES_STORAGE_KEY));
+}
+
+function persistGestureLibrary() {
+  window.localStorage.setItem(CUSTOM_GESTURES_STORAGE_KEY, JSON.stringify(customGestureLibrary));
+}
+
+function applyGestureLibrary(candidate, successMessage) {
+  customGestureLibrary = normalizeGestureLibrary(candidate);
+  persistGestureLibrary();
+  renderGestureTrainer();
+  if (successMessage) {
+    trainerHintEl.textContent = successMessage;
+  }
+}
+
+async function preloadGestureLibraryFromAssets() {
+  if (hasStoredGestureLibrary()) {
+    return;
+  }
+
+  try {
+    const response = await fetch(PRELOADED_GESTURES_URL, { cache: "no-store" });
+    if (!response.ok) {
+      return;
+    }
+
+    const parsed = JSON.parse(await response.text());
+    const gestures = parsed?.gestures ?? parsed;
+    const normalized = normalizeGestureLibrary(gestures);
+    const totalSamples = Object.values(normalized).reduce((sum, samples) => sum + samples.length, 0);
+    if (!totalSamples) {
+      return;
+    }
+
+    applyGestureLibrary(normalized, `Loaded ${totalSamples} shared gesture samples from assets/gesture-samples.json.`);
+  } catch {
+  }
+}
+
+function createGestureLibraryFilePayload(includeMetadata = true) {
+  const gestures = normalizeGestureLibrary(customGestureLibrary);
+
+  if (!includeMetadata) {
+    return {
+      version: 1,
+      gestures
+    };
+  }
+
+  return {
+    exportedAt: new Date().toISOString(),
+    version: 1,
+    gestures
+  };
+}
+
+function downloadJsonFile(fileName, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const downloadUrl = URL.createObjectURL(blob);
+  const downloadLink = document.createElement("a");
+  downloadLink.href = downloadUrl;
+  downloadLink.download = fileName;
+  document.body.append(downloadLink);
+  downloadLink.click();
+  downloadLink.remove();
+  URL.revokeObjectURL(downloadUrl);
+}
+
+function exportGestureLibrary() {
+  downloadJsonFile("gesture-samples.json", createGestureLibraryFilePayload());
+  trainerHintEl.textContent = "Exported gesture samples to gesture-samples.json.";
+}
+
+async function saveGestureLibraryAsRepoPreload() {
+  const payload = createGestureLibraryFilePayload(false);
+
+  try {
+    if (window.showSaveFilePicker) {
+      const fileHandle = await window.showSaveFilePicker({
+        suggestedName: "gesture-samples.json",
+        types: [
+          {
+            description: "JSON files",
+            accept: {
+              "application/json": [".json"]
+            }
+          }
+        ]
+      });
+      const writable = await fileHandle.createWritable();
+      await writable.write(JSON.stringify(payload, null, 2));
+      await writable.close();
+      trainerHintEl.textContent = "Saved repo preload JSON. Place it at assets/gesture-samples.json if you picked another folder.";
+      return;
+    }
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      trainerHintEl.textContent = "Repo preload save was cancelled.";
+      return;
+    }
+  }
+
+  downloadJsonFile("gesture-samples.json", payload);
+  trainerHintEl.textContent = "Downloaded repo preload JSON. Move it to assets/gesture-samples.json in this repo.";
+}
+
+function importGestureLibraryFromText(fileText) {
+  const parsed = JSON.parse(fileText);
+  const gestures = parsed?.gestures ?? parsed;
+  applyGestureLibrary(gestures, "Imported gesture samples from JSON file.");
+}
+
+async function handleGestureImport(event) {
+  const [file] = event.target.files || [];
+  if (!file) {
+    return;
+  }
+
+  try {
+    importGestureLibraryFromText(await file.text());
+  } catch {
+    trainerHintEl.textContent = "Gesture import failed. Choose a valid gesture-samples.json file.";
+  } finally {
+    importCustomGesturesInput.value = "";
+  }
+}
+
+function triggerGestureImport() {
+  importCustomGesturesInput.click();
+}
 
 function distance2D(pointA, pointB) {
   return Math.hypot(pointA.x - pointB.x, pointA.y - pointB.y);
@@ -43,6 +296,236 @@ function loadImageFromUrl(imageUrl) {
     image.src = imageUrl;
   });
 }
+
+function getDigitPngName(digit) {
+  return `${digit}.png`;
+}
+
+function getTextureSourceLabel(digit, label) {
+  return label || `generated/${getDigitPngName(digit)}`;
+}
+
+function buildGestureVector(landmarks) {
+  const wrist = landmarks[0];
+  const middleBase = landmarks[9];
+  const palmWidthVector = {
+    x: landmarks[5].x - landmarks[17].x,
+    y: landmarks[5].y - landmarks[17].y
+  };
+  const palmWidth = Math.hypot(palmWidthVector.x, palmWidthVector.y) || 1;
+  const axisX = {
+    x: palmWidthVector.x / palmWidth,
+    y: palmWidthVector.y / palmWidth
+  };
+  let axisY = {
+    x: -axisX.y,
+    y: axisX.x
+  };
+
+  const wristToMiddle = {
+    x: middleBase.x - wrist.x,
+    y: middleBase.y - wrist.y
+  };
+
+  if (axisY.x * wristToMiddle.x + axisY.y * wristToMiddle.y < 0) {
+    axisY = { x: -axisY.x, y: -axisY.y };
+  }
+
+  const scale = Math.max(distance2D(wrist, middleBase), 0.05);
+  const vector = [];
+
+  for (const landmark of landmarks) {
+    const relativeX = landmark.x - wrist.x;
+    const relativeY = landmark.y - wrist.y;
+    vector.push((relativeX * axisX.x + relativeY * axisX.y) / scale);
+    vector.push((relativeX * axisY.x + relativeY * axisY.y) / scale);
+    vector.push((landmark.z - wrist.z) / scale);
+  }
+
+  return vector;
+}
+
+function getGestureDistance(vectorA, vectorB) {
+  let total = 0;
+  for (let index = 0; index < vectorA.length; index += 1) {
+    total += Math.abs(vectorA[index] - vectorB[index]);
+  }
+  return total / vectorA.length;
+}
+
+function getSavedGestureCounts() {
+  return Array.from({ length: 10 }, (_, digit) => customGestureLibrary[String(digit)].length);
+}
+
+function classifyCustomDigit(gestureVector) {
+  const trainedDigits = [];
+
+  for (let digit = 0; digit <= 9; digit += 1) {
+    if (customGestureLibrary[String(digit)].length) {
+      trainedDigits.push(digit);
+    }
+  }
+
+  if (!trainedDigits.length) {
+    return null;
+  }
+
+  let bestDigit = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  let secondScore = Number.POSITIVE_INFINITY;
+
+  for (const digit of trainedDigits) {
+    let digitBestScore = Number.POSITIVE_INFINITY;
+
+    for (const sample of customGestureLibrary[String(digit)]) {
+      digitBestScore = Math.min(digitBestScore, getGestureDistance(gestureVector, sample));
+    }
+
+    if (digitBestScore < bestScore) {
+      secondScore = bestScore;
+      bestScore = digitBestScore;
+      bestDigit = digit;
+    } else if (digitBestScore < secondScore) {
+      secondScore = digitBestScore;
+    }
+  }
+
+  if (trainedDigits.length === 1) {
+    return bestScore < 0.2 ? bestDigit : null;
+  }
+
+  if (bestScore < 0.16) {
+    return bestDigit;
+  }
+
+  if (secondScore - bestScore > 0.02 || bestScore / Math.max(secondScore, 0.001) < 0.9) {
+    return bestDigit;
+  }
+
+  return null;
+}
+
+function classifyRecognizedDigit(landmarks, gestureVector) {
+  const customDigit = classifyCustomDigit(gestureVector);
+  if (customDigit !== null) {
+    return customDigit;
+  }
+
+  return classifyDigit(landmarks);
+}
+
+function updateTrainerPanelVisibility() {
+  trainerPanelBodyEl.classList.toggle("is-collapsed", isTrainerPanelCollapsed);
+  toggleTrainerPanelButton.setAttribute("aria-expanded", String(!isTrainerPanelCollapsed));
+  toggleTrainerPanelButton.textContent = isTrainerPanelCollapsed ? "Expand trainer" : "Collapse trainer";
+}
+
+function toggleTrainerPanel() {
+  isTrainerPanelCollapsed = !isTrainerPanelCollapsed;
+  updateTrainerPanelVisibility();
+}
+
+function renderGestureTrainer() {
+  for (let digit = 0; digit <= 9; digit += 1) {
+    const slot = trainerSlotElements.get(digit);
+    if (!slot) {
+      continue;
+    }
+
+    const count = customGestureLibrary[String(digit)].length;
+    slot.count.textContent = count === 1 ? "1 sample" : `${count} samples`;
+    slot.state.textContent = count ? "Custom gesture ready" : "No saved gesture";
+  }
+
+  const counts = getSavedGestureCounts();
+  const totalSamples = counts.reduce((sum, count) => sum + count, 0);
+  if (!totalSamples) {
+    trainerHintEl.textContent = "Hold a pose in frame, then save it to a digit. Saved gestures stay in this browser.";
+    return;
+  }
+
+  trainerHintEl.textContent = `Saved ${totalSamples} gesture samples across ${counts.filter(Boolean).length} digits. Add more variations for better recognition.`;
+}
+
+function saveGestureTemplate(digit) {
+  if (!latestGestureVector || performance.now() - lastLandmarkTime > 600) {
+    trainerHintEl.textContent = "Show a clearly tracked hand before saving a custom gesture.";
+    return;
+  }
+
+  customGestureLibrary[String(digit)].push([...latestGestureVector]);
+  persistGestureLibrary();
+  renderGestureTrainer();
+  trainerHintEl.textContent = `Saved the current hand pose for digit ${digit}. Capture several variants for better matching.`;
+}
+
+function clearGestureTemplates(digit) {
+  customGestureLibrary[String(digit)] = [];
+  persistGestureLibrary();
+  renderGestureTrainer();
+  trainerHintEl.textContent = `Cleared saved custom gestures for digit ${digit}.`;
+}
+
+function resetAllGestureTemplates() {
+  customGestureLibrary = createEmptyGestureLibrary();
+  persistGestureLibrary();
+  renderGestureTrainer();
+  trainerHintEl.textContent = "Cleared all saved custom gestures.";
+}
+
+function initializeGestureTrainer() {
+  const fragment = document.createDocumentFragment();
+
+  for (let digit = 0; digit <= 9; digit += 1) {
+    const slot = document.createElement("article");
+    slot.className = "gesture-slot";
+
+    const header = document.createElement("div");
+    header.className = "gesture-slot-header";
+
+    const title = document.createElement("strong");
+    title.textContent = `Digit ${digit}`;
+
+    const count = document.createElement("span");
+    count.className = "gesture-sample-count";
+    header.append(title, count);
+
+    const actions = document.createElement("div");
+    actions.className = "gesture-slot-actions";
+
+    const saveButton = document.createElement("button");
+    saveButton.type = "button";
+    saveButton.className = "ghost-button";
+    saveButton.textContent = "Save pose";
+    saveButton.addEventListener("click", () => saveGestureTemplate(digit));
+
+    const clearButton = document.createElement("button");
+    clearButton.type = "button";
+    clearButton.className = "ghost-button danger-button";
+    clearButton.textContent = "Clear";
+    clearButton.addEventListener("click", () => clearGestureTemplates(digit));
+
+    actions.append(saveButton, clearButton);
+
+    const state = document.createElement("div");
+    state.className = "gesture-slot-state";
+
+    slot.append(header, actions, state);
+    fragment.append(slot);
+    trainerSlotElements.set(digit, { count, state });
+  }
+
+  gestureTrainerGridEl.append(fragment);
+  toggleTrainerPanelButton.addEventListener("click", toggleTrainerPanel);
+  exportCustomGesturesButton.addEventListener("click", exportGestureLibrary);
+  saveRepoPreloadButton.addEventListener("click", saveGestureLibraryAsRepoPreload);
+  importCustomGesturesButton.addEventListener("click", triggerGestureImport);
+  importCustomGesturesInput.addEventListener("change", handleGestureImport);
+  resetCustomGesturesButton.addEventListener("click", resetAllGestureTemplates);
+  updateTrainerPanelVisibility();
+  renderGestureTrainer();
+}
+
 
 function buildDigitTargets(image, count) {
   const sampleCanvas = document.createElement("canvas");
@@ -95,6 +578,50 @@ function buildDigitTargets(image, count) {
     targets[i3 + 1] = normalizedY * 7.8;
     targets[i3 + 2] = THREE.MathUtils.randFloatSpread(0.8);
     tones[index] = sample.brightness;
+  }
+
+  return { targets, tones };
+}
+
+function buildDigitTargetsFromDigit(digit, count) {
+  const maskCanvas = document.createElement("canvas");
+  maskCanvas.width = 360;
+  maskCanvas.height = 360;
+  const maskCtx = maskCanvas.getContext("2d", { willReadFrequently: true });
+
+  maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+  maskCtx.fillStyle = "#ffffff";
+  maskCtx.textAlign = "center";
+  maskCtx.textBaseline = "middle";
+  maskCtx.font = "700 300px Sora, serif";
+  maskCtx.fillText(String(digit), maskCanvas.width / 2, maskCanvas.height / 2 + 20);
+
+  const imageData = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height).data;
+  const candidatePixels = [];
+
+  for (let y = 0; y < maskCanvas.height; y += 2) {
+    for (let x = 0; x < maskCanvas.width; x += 2) {
+      const pixelIndex = (y * maskCanvas.width + x) * 4;
+      if (imageData[pixelIndex + 3] < 32) {
+        continue;
+      }
+
+      candidatePixels.push({ x, y });
+    }
+  }
+
+  const targets = new Float32Array(count * 3);
+  const tones = new Float32Array(count);
+
+  for (let index = 0; index < count; index += 1) {
+    const sample = candidatePixels[Math.floor(Math.random() * candidatePixels.length)];
+    const i3 = index * 3;
+    const normalizedX = sample.x / maskCanvas.width - 0.5;
+    const normalizedY = 0.5 - sample.y / maskCanvas.height;
+    targets[i3] = normalizedX * 9.2;
+    targets[i3 + 1] = normalizedY * 9.2;
+    targets[i3 + 2] = THREE.MathUtils.randFloatSpread(0.35);
+    tones[index] = sample.y / maskCanvas.height;
   }
 
   return { targets, tones };
@@ -181,7 +708,7 @@ function ensureDigitTexture(digit) {
   const imageUrl = createDigitPng(digit);
   const texture = textureLoader.load(imageUrl);
   texture.colorSpace = THREE.SRGBColorSpace;
-  const entry = { imageUrl, texture };
+  const entry = { imageUrl, texture, label: `generated/${getDigitPngName(digit)}` };
   digitTextures.set(digit, entry);
 
   checkCustomDigitUrl(digit).then((customUrl) => {
@@ -195,9 +722,9 @@ function ensureDigitTexture(digit) {
         customTexture.colorSpace = THREE.SRGBColorSpace;
         entry.imageUrl = customUrl;
         entry.texture = customTexture;
+        entry.label = customUrl.replace(/^\.\//, "");
 
         if (currentDigit === digit || (currentDigit === null && digit === 0)) {
-          digitPreviewEl.src = customUrl;
           sceneController.setDigitTexture(digit, customTexture, customUrl);
         }
       },
@@ -296,25 +823,47 @@ function updateGesture(digit) {
   }
 
   currentDigit = digit;
+  playGestureChangeSound(digit);
   gestureValueEl.textContent = String(digit);
   gestureHintEl.textContent = "Digit locked. Hold steady to keep the countdown shape stable.";
   trackingStateEl.textContent = "Hand tracked";
-  const { imageUrl, texture } = ensureDigitTexture(digit);
-  digitPreviewEl.src = imageUrl;
-  digitPreviewEl.dataset.loaded = "true";
-  sceneController.setDigitTexture(digit, texture, imageUrl);
+  const textureEntry = ensureDigitTexture(digit);
+  sceneController.setDigitTexture(digit, textureEntry.texture, textureEntry.imageUrl);
 }
 
 function resetGestureStatus() {
+  if (cameraState !== "live") {
+    return;
+  }
+
   if (performance.now() - lastLandmarkTime < 900) {
     return;
   }
 
   pendingDigit = null;
   pendingFrames = 0;
+  latestGestureVector = null;
   trackingStateEl.textContent = "Searching for hand";
   if (currentDigit === null) {
     gestureHintEl.textContent = "Show one hand inside the camera frame with a number gesture from 0 to 9.";
+  }
+}
+
+function updateSceneFullscreenUi() {
+  const isFullscreen = document.fullscreenElement === sceneCardEl;
+  sceneCardEl.classList.toggle("is-fullscreen", isFullscreen);
+  toggleSceneFullscreenButton.textContent = isFullscreen ? "Exit fullscreen" : "Fullscreen";
+  toggleSceneFullscreenButton.setAttribute("aria-pressed", String(isFullscreen));
+}
+
+async function toggleSceneFullscreen() {
+  try {
+    if (document.fullscreenElement === sceneCardEl) {
+      await document.exitFullscreen();
+    } else {
+      await sceneCardEl.requestFullscreen();
+    }
+  } catch {
   }
 }
 
@@ -363,7 +912,7 @@ class ParticleSceneController {
     this.digitGeometry.setAttribute("position", new THREE.BufferAttribute(this.particlePositions, 3));
     this.digitGeometry.setAttribute("color", new THREE.BufferAttribute(this.particleColors, 3));
     this.digitMaterial = new THREE.PointsMaterial({
-      size: 0.1,
+      size: 0.12,
       vertexColors: true,
       transparent: true,
       opacity: 0.9,
@@ -425,21 +974,11 @@ class ParticleSceneController {
     this.paletteA.set(DIGIT_COLORS[digit][0]);
     this.paletteB.set(DIGIT_COLORS[digit][1]);
     const currentToken = ++this.morphToken;
-
-    let image = texture?.image;
-    if (!image || !image.width) {
-      try {
-        image = await loadImageFromUrl(imageUrl);
-      } catch {
-        image = null;
-      }
-    }
-
-    if (!image || currentToken !== this.morphToken) {
+    const { targets, tones } = buildDigitTargetsFromDigit(digit, this.particleCount);
+    if (currentToken !== this.morphToken) {
       return;
     }
 
-    const { targets, tones } = buildDigitTargets(image, this.particleCount);
     this.particleTargets.set(targets);
 
     for (let index = 0; index < this.particleCount; index += 1) {
@@ -510,8 +1049,16 @@ class ParticleSceneController {
 }
 
 const sceneController = new ParticleSceneController(sceneCanvas);
-const initialDigit = ensureDigitTexture(0).imageUrl;
-digitPreviewEl.src = initialDigit;
+const initialDigitEntry = ensureDigitTexture(0);
+initializeGestureTrainer();
+preloadGestureLibraryFromAssets();
+toggleSceneFullscreenButton.addEventListener("click", toggleSceneFullscreen);
+sceneCanvas.addEventListener("dblclick", toggleSceneFullscreen);
+document.addEventListener("fullscreenchange", () => {
+  updateSceneFullscreenUi();
+  sceneController.handleResize();
+});
+updateSceneFullscreenUi();
 
 function drawHandResults(results) {
   const width = handCanvas.width;
@@ -534,10 +1081,12 @@ function drawHandResults(results) {
       });
 
       lastLandmarkTime = performance.now();
-      const digit = classifyDigit(landmarks);
+      latestGestureVector = buildGestureVector(landmarks);
+      const digit = classifyRecognizedDigit(landmarks, latestGestureVector);
       updateGesture(digit);
     }
   } else {
+    latestGestureVector = null;
     resetGestureStatus();
   }
 
@@ -573,46 +1122,69 @@ videoElement.muted = true;
 videoElement.playsInline = true;
 
 async function startCamera() {
+  stopCamera({ preserveHint: true });
+  cameraState = "requesting";
   trackingStateEl.textContent = "Requesting camera";
-
+  updateCaptureButton();
   try {
-    if (navigator.mediaDevices?.getUserMedia) {
-      const warmupStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 720 } },
-        audio: false
-      });
-      for (const track of warmupStream.getTracks()) {
-        track.stop();
-      }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("MediaDevices API unavailable in this browser context.");
     }
-  } catch {
-    // MediaPipe camera may still recover if browser already granted permission previously.
-  }
 
-  const camera = new Camera(videoElement, {
-    onFrame: async () => {
+    activeStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: "user",
+        width: { ideal: 960 },
+        height: { ideal: 720 }
+      },
+      audio: false
+    });
+
+    videoElement.srcObject = activeStream;
+    await videoElement.play();
+
+    const processFrame = async () => {
+      animationFrameId = requestAnimationFrame(processFrame);
+
+      if (isProcessingFrame || videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+        return;
+      }
+
+      isProcessingFrame = true;
       try {
         await hands.send({ image: videoElement });
       } catch {
         trackingStateEl.textContent = "Tracking paused";
+      } finally {
+        isProcessingFrame = false;
       }
-    },
-    width: 960,
-    height: 720,
-    facingMode: "user"
-  });
+    };
 
-  try {
-    await camera.start();
+    processFrame();
+    cameraState = "live";
     trackingStateEl.textContent = "Camera live";
     gestureHintEl.textContent = "Show one hand with a clear number gesture from 0 to 9.";
+    updateCaptureButton();
   } catch (error) {
+    stopCamera({ preserveHint: true });
+    cameraState = "unavailable";
     trackingStateEl.textContent = "Camera unavailable";
-    gestureHintEl.textContent = "Camera start failed. Use localhost/HTTPS, grant permission, and verify no other app is locking the camera.";
+    if (error?.name === "NotAllowedError") {
+      gestureHintEl.textContent = "Camera permission was denied. Allow camera access in the browser and reload the page.";
+    } else if (error?.name === "NotReadableError" || error?.name === "AbortError") {
+      gestureHintEl.textContent = "Camera is busy in another app or browser tab. Close the other camera session, then reload the page.";
+    } else if (error?.name === "NotFoundError") {
+      gestureHintEl.textContent = "No camera was found. Connect a camera, then reload the page.";
+    } else {
+      gestureHintEl.textContent = "Camera start failed. Use localhost/HTTPS, grant permission, and verify no other app is locking the camera.";
+    }
+    updateCaptureButton();
     console.error(error);
   }
 }
 
+toggleCaptureButton.addEventListener("click", toggleCapture);
+updateCaptureButton();
 startCamera();
 
 window.setInterval(resetGestureStatus, 250);

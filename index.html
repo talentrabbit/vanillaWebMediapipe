@@ -21,9 +21,27 @@
         <strong id="gestureValue">--</strong>
         <p id="gestureHint">Allow camera access and hold one digit steady for a moment.</p>
       </article>
-      <article class="status-card preview-card">
-        <span class="status-label">Current PNG</span>
-        <img id="digitPreview" alt="Detected digit preview" />
+    </section>
+
+    <section class="trainer-panel">
+      <article class="trainer-card">
+        <div class="trainer-toolbar">
+          <div class="trainer-toolbar-main">
+            <span class="status-label">Custom Gesture Trainer</span>
+          </div>
+          <div class="trainer-toolbar-actions">
+            <button id="toggleTrainerPanel" class="ghost-button" type="button" aria-expanded="true">Collapse trainer</button>
+            <button id="exportCustomGestures" class="ghost-button" type="button">Export gestures</button>
+            <button id="saveRepoPreload" class="ghost-button" type="button">Save as repo preload</button>
+            <button id="importCustomGestures" class="ghost-button" type="button">Import gestures</button>
+            <button id="resetCustomGestures" class="ghost-button" type="button">Reset all gestures</button>
+          </div>
+        </div>
+        <div id="trainerPanelBody" class="trainer-panel-body">
+          <p id="trainerHint">Hold a pose in frame, then save it to a digit. Saved gestures stay in this browser.</p>
+          <div id="gestureTrainerGrid" class="gesture-trainer-grid"></div>
+        </div>
+        <input id="importCustomGesturesInput" type="file" accept="application/json,.json" hidden />
       </article>
     </section>
 
@@ -31,7 +49,10 @@
       <div class="camera-card">
         <div class="camera-header">
           <span>MediaPipe camera</span>
-          <span id="trackingState">Waiting for camera</span>
+          <div class="camera-header-actions">
+            <span id="trackingState">Waiting for camera</span>
+            <button id="toggleCaptureButton" class="ghost-button camera-toggle-button" type="button">Stop capture</button>
+          </div>
         </div>
         <div class="camera-stack">
           <video class="input-video" playsinline muted></video>
@@ -42,7 +63,10 @@
       <div class="scene-card">
         <div class="scene-header">
           <span>Three.js particle renderer</span>
-          <span>Dynamic number particles</span>
+          <div class="scene-header-actions">
+            <span>Dynamic number particles</span>
+            <button id="toggleSceneFullscreen" class="ghost-button scene-fullscreen-button" type="button">Fullscreen</button>
+          </div>
         </div>
         <canvas id="sceneCanvas"></canvas>
       </div>
