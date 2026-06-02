@@ -35,6 +35,13 @@ const DIGIT_COLORS = [
   ["#ffe08f", "#ff8a58"]
 ];
 
+const SPECIAL_DIGIT_EFFECTS = {
+  3: { kind: "word", label: "Mission", scale: 5.8 },
+  2: { kind: "word", label: "First", scale: 5.6 },
+  1: { kind: "word", label: "Delivery", scale: 5.4 },
+  0: { kind: "fireworks", label: "", scale: 4.8 }
+};
+
 const CUSTOM_DIGIT_FOLDER = "./assets/custom-png";
 const CUSTOM_GESTURES_STORAGE_KEY = "gestureParticles.customGestures.v1";
 const PRELOADED_GESTURES_URL = "./assets/gesture-samples.json";
@@ -268,6 +275,55 @@ function loadImageFromUrl(imageUrl) {
     image.onerror = () => reject(new Error(`Unable to load image: ${imageUrl}`));
     image.src = imageUrl;
   });
+}
+
+function createWordArtTexture(label, colors) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1024;
+  canvas.height = 320;
+  const ctx = canvas.getContext("2d");
+
+  const background = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+  background.addColorStop(0, "rgba(6, 14, 26, 0)");
+  background.addColorStop(0.5, "rgba(6, 14, 26, 0.2)");
+  background.addColorStop(1, "rgba(6, 14, 26, 0)");
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = "700 154px Sora, sans-serif";
+
+  const fill = ctx.createLinearGradient(120, 40, 860, 260);
+  fill.addColorStop(0, colors[0]);
+  fill.addColorStop(0.5, "#ffffff");
+  fill.addColorStop(1, colors[1]);
+
+  ctx.lineJoin = "round";
+  ctx.lineWidth = 24;
+  ctx.strokeStyle = "rgba(8, 17, 31, 0.95)";
+  ctx.shadowColor = colors[1];
+  ctx.shadowBlur = 46;
+  ctx.strokeText(label, canvas.width / 2, canvas.height / 2 + 8);
+
+  ctx.fillStyle = fill;
+  ctx.fillText(label, canvas.width / 2, canvas.height / 2 + 8);
+
+  ctx.shadowBlur = 0;
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = "rgba(255,255,255,0.55)";
+  ctx.strokeText(label, canvas.width / 2, canvas.height / 2 + 8);
+
+  for (let index = 0; index < 14; index += 1) {
+    const x = 110 + index * 58;
+    const y = 42 + (index % 2) * 14;
+    ctx.fillStyle = `rgba(255,255,255,${0.05 + index * 0.008})`;
+    ctx.fillRect(x, y, 32, 4);
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
 }
 
 function getDigitPngName(digit) {
@@ -556,7 +612,7 @@ function buildDigitTargets(image, count) {
   return { targets, tones };
 }
 
-function buildDigitTargetsFromDigit(digit, count) {
+function buildDigitTargetsFromDigit(digit, count, scale = 9.2) {
   const maskCanvas = document.createElement("canvas");
   maskCanvas.width = 360;
   maskCanvas.height = 360;
@@ -591,8 +647,8 @@ function buildDigitTargetsFromDigit(digit, count) {
     const i3 = index * 3;
     const normalizedX = sample.x / maskCanvas.width - 0.5;
     const normalizedY = 0.5 - sample.y / maskCanvas.height;
-    targets[i3] = normalizedX * 9.2;
-    targets[i3 + 1] = normalizedY * 9.2;
+    targets[i3] = normalizedX * scale;
+    targets[i3 + 1] = normalizedY * scale;
     targets[i3 + 2] = THREE.MathUtils.randFloatSpread(0.35);
     tones[index] = sample.y / maskCanvas.height;
   }
@@ -976,6 +1032,12 @@ class ParticleSceneController {
     this.paletteA = new THREE.Color(DIGIT_COLORS[0][0]);
     this.paletteB = new THREE.Color(DIGIT_COLORS[0][1]);
     this.morphToken = 0;
+    this.activeEffectDigit = null;
+    this.activeEffect = null;
+    this.wordArtTexture = null;
+    this.lastFireworkSpawn = 0;
+    this.fireworkBurstCount = 0;
+    this.fireworksEnabled = false;
 
     this.scene.add(new THREE.AmbientLight(0xffffff, 1.2));
 
@@ -1015,6 +1077,18 @@ class ParticleSceneController {
     this.digitPoints = new THREE.Points(this.digitGeometry, this.digitMaterial);
     this.scene.add(this.digitPoints);
 
+    this.effectSprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+      })
+    );
+    this.effectSprite.position.set(0, 4.4, 0.8);
+    this.effectSprite.scale.set(0, 0, 1);
+    this.scene.add(this.effectSprite);
+
     this.bgParticleCount = 560;
     this.bgPositions = new Float32Array(this.bgParticleCount * 3);
     this.bgColors = new Float32Array(this.bgParticleCount * 3);
@@ -1053,6 +1127,48 @@ class ParticleSceneController {
     this.bgPoints = new THREE.Points(this.bgGeometry, this.bgMaterial);
     this.scene.add(this.bgPoints);
 
+    this.fireworkParticleCount = 960;
+    this.fireworkPositions = new Float32Array(this.fireworkParticleCount * 3);
+    this.fireworkColors = new Float32Array(this.fireworkParticleCount * 3);
+    this.fireworkMeta = Array.from({ length: this.fireworkParticleCount }, () => ({
+      active: false,
+      originX: 0,
+      originY: 0,
+      originZ: 0,
+      velocityX: 0,
+      velocityY: 0,
+      velocityZ: 0,
+      age: 0,
+      life: 1,
+      alpha: 0
+    }));
+    this.fireworkGeometry = new THREE.BufferGeometry();
+
+    for (let index = 0; index < this.fireworkParticleCount; index += 1) {
+      const i3 = index * 3;
+      this.fireworkPositions[i3] = 0;
+      this.fireworkPositions[i3 + 1] = -30;
+      this.fireworkPositions[i3 + 2] = 0;
+      this.fireworkColors[i3] = 1;
+      this.fireworkColors[i3 + 1] = 0.7;
+      this.fireworkColors[i3 + 2] = 0.4;
+    }
+
+    this.fireworkGeometry.setAttribute("position", new THREE.BufferAttribute(this.fireworkPositions, 3));
+    this.fireworkGeometry.setAttribute("color", new THREE.BufferAttribute(this.fireworkColors, 3));
+    this.fireworkMaterial = new THREE.PointsMaterial({
+      size: 0.22,
+      vertexColors: true,
+      transparent: true,
+      opacity: 1,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true
+    });
+    this.fireworkPoints = new THREE.Points(this.fireworkGeometry, this.fireworkMaterial);
+    this.fireworkPoints.visible = false;
+    this.scene.add(this.fireworkPoints);
+
     this.clock = new THREE.Clock();
     this.handleResize();
     window.addEventListener("resize", () => this.handleResize());
@@ -1066,7 +1182,9 @@ class ParticleSceneController {
     this.paletteA.set(DIGIT_COLORS[digit][0]);
     this.paletteB.set(DIGIT_COLORS[digit][1]);
     const currentToken = ++this.morphToken;
-    const { targets, tones } = buildDigitTargetsFromDigit(digit, this.particleCount);
+    const effectConfig = SPECIAL_DIGIT_EFFECTS[digit] || null;
+    const digitScale = effectConfig?.scale ?? 9.2;
+    const { targets, tones } = buildDigitTargetsFromDigit(digit, this.particleCount, digitScale);
     if (currentToken !== this.morphToken) {
       return;
     }
@@ -1085,6 +1203,97 @@ class ParticleSceneController {
     }
 
     this.digitGeometry.attributes.color.needsUpdate = true;
+    this.setSpecialEffect(digit);
+  }
+
+  setSpecialEffect(digit) {
+    const effectConfig = SPECIAL_DIGIT_EFFECTS[digit] || null;
+    this.activeEffectDigit = digit;
+    this.activeEffect = effectConfig;
+    this.fireworksEnabled = effectConfig?.kind === "fireworks";
+    this.fireworkPoints.visible = this.fireworksEnabled;
+    this.fireworkBurstCount = 0;
+
+    if (this.wordArtTexture) {
+      this.wordArtTexture.dispose();
+      this.wordArtTexture = null;
+    }
+
+    if (effectConfig?.kind === "word") {
+      this.wordArtTexture = createWordArtTexture(effectConfig.label, DIGIT_COLORS[digit]);
+      this.effectSprite.material.map = this.wordArtTexture;
+      this.effectSprite.material.needsUpdate = true;
+      this.effectSprite.visible = true;
+      this.effectSprite.scale.set(8.8, 2.6, 1);
+      this.effectSprite.position.set(0, 4.35, 0.8);
+      return;
+    }
+
+    this.effectSprite.visible = false;
+    this.effectSprite.material.map = null;
+    this.effectSprite.material.opacity = 0;
+
+    if (!this.fireworksEnabled) {
+      for (const particle of this.fireworkMeta) {
+        particle.active = false;
+      }
+      this.fireworkPoints.visible = false;
+      this.fireworkMaterial.opacity = 0;
+      return;
+    }
+
+    this.fireworkMaterial.opacity = 1;
+    this.fireworkPoints.visible = true;
+    this.lastFireworkSpawn = 0;
+
+    for (let burstIndex = 0; burstIndex < 6; burstIndex += 1) {
+      this.spawnFireworkBurst();
+    }
+  }
+
+  spawnFireworkBurst() {
+    let burstSize = 72;
+    const originX = THREE.MathUtils.randFloatSpread(18);
+    const originY = THREE.MathUtils.randFloat(-4.2, 5.6);
+    const originZ = THREE.MathUtils.randFloatSpread(5.5);
+    const colorA = new THREE.Color(DIGIT_COLORS[Math.floor(Math.random() * DIGIT_COLORS.length)][0]);
+    const colorB = new THREE.Color(DIGIT_COLORS[Math.floor(Math.random() * DIGIT_COLORS.length)][1]);
+
+    for (let index = 0; index < this.fireworkParticleCount && burstSize > 0; index += 1) {
+      const particle = this.fireworkMeta[index];
+      if (particle.active) {
+        continue;
+      }
+
+      const i3 = index * 3;
+      const angle = Math.random() * Math.PI * 2;
+      const spread = THREE.MathUtils.randFloat(0.08, 0.24);
+      const lift = THREE.MathUtils.randFloat(1.8, 5.6);
+      const mix = Math.random();
+      const color = colorA.clone().lerp(colorB, mix);
+
+      particle.active = true;
+      particle.originX = originX;
+      particle.originY = originY;
+      particle.originZ = originZ;
+      particle.velocityX = Math.cos(angle) * lift;
+      particle.velocityY = Math.sin(angle) * lift + THREE.MathUtils.randFloat(-0.2, 1.7);
+      particle.velocityZ = THREE.MathUtils.randFloatSpread(2.1);
+      particle.age = 0;
+      particle.life = THREE.MathUtils.randFloat(1.15, 2.1);
+      particle.alpha = 1;
+
+      this.fireworkPositions[i3] = originX;
+      this.fireworkPositions[i3 + 1] = originY;
+      this.fireworkPositions[i3 + 2] = originZ;
+      this.fireworkColors[i3] = Math.min(1, color.r + spread);
+      this.fireworkColors[i3 + 1] = Math.min(1, color.g + spread * 0.6);
+      this.fireworkColors[i3 + 2] = Math.min(1, color.b + spread * 0.3);
+
+      burstSize -= 1;
+    }
+
+    this.fireworkGeometry.attributes.color.needsUpdate = true;
   }
 
   handleResize() {
@@ -1132,8 +1341,65 @@ class ParticleSceneController {
     this.bgPoints.rotation.y = elapsed * 0.05;
     this.bgPoints.rotation.x = Math.sin(elapsed * 0.16) * 0.12;
 
+    if (this.activeEffect?.kind === "word") {
+      const flicker = 0.7 + Math.sin(elapsed * 9.4) * 0.14 + Math.sin(elapsed * 31) * 0.06;
+      this.effectSprite.visible = true;
+      this.effectSprite.material.opacity = flicker;
+      this.effectSprite.position.y = 4.35 + Math.sin(elapsed * 2.2) * 0.12;
+      const scalePulse = 1 + Math.sin(elapsed * 3.2) * 0.035;
+      this.effectSprite.scale.set(8.8 * scalePulse, 2.75 * scalePulse, 1);
+      this.effectSprite.material.rotation = Math.sin(elapsed * 0.9) * 0.02;
+    } else {
+      this.effectSprite.material.opacity *= 0.92;
+    }
+
+    if (this.fireworksEnabled) {
+      this.fireworkPoints.visible = true;
+      this.camera.position.x = Math.sin(elapsed * 0.72) * 0.18;
+      this.camera.position.y = Math.cos(elapsed * 0.64) * 0.14;
+      if (elapsed - this.lastFireworkSpawn > 0.08) {
+        this.lastFireworkSpawn = elapsed;
+        this.spawnFireworkBurst();
+      }
+    }
+
+    for (let index = 0; index < this.fireworkParticleCount; index += 1) {
+      const particle = this.fireworkMeta[index];
+      const i3 = index * 3;
+
+      if (!particle.active) {
+        if (!this.fireworksEnabled) {
+          this.fireworkPositions[i3 + 1] = -30;
+        }
+        continue;
+      }
+
+      particle.age += 1 / 60;
+      const lifeProgress = particle.age / particle.life;
+
+      if (lifeProgress >= 1) {
+        particle.active = false;
+        this.fireworkPositions[i3 + 1] = -30;
+        continue;
+      }
+
+      this.fireworkPositions[i3] = particle.originX + particle.velocityX * particle.age;
+      this.fireworkPositions[i3 + 1] = particle.originY + particle.velocityY * particle.age - particle.age * particle.age * 1.9;
+      this.fireworkPositions[i3 + 2] = particle.originZ + particle.velocityZ * particle.age;
+
+      const fade = 1 - lifeProgress;
+      this.fireworkColors[i3] *= 0.996;
+      this.fireworkColors[i3 + 1] *= 0.996;
+      this.fireworkColors[i3 + 2] *= 0.996;
+      particle.alpha = fade;
+    }
+
+    this.fireworkMaterial.opacity = this.fireworksEnabled ? 0.95 : Math.max(this.fireworkMaterial.opacity * 0.95, 0);
+
     this.digitGeometry.attributes.position.needsUpdate = true;
     this.bgGeometry.attributes.position.needsUpdate = true;
+    this.fireworkGeometry.attributes.position.needsUpdate = true;
+    this.fireworkGeometry.attributes.color.needsUpdate = true;
 
     this.renderer.render(this.scene, this.camera);
     requestAnimationFrame(this.animate);
