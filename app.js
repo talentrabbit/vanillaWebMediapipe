@@ -12,6 +12,7 @@ const toggleCaptureButton = document.querySelector("#toggleCaptureButton");
 const toggleSceneFullscreenButton = document.querySelector("#toggleSceneFullscreen");
 const gestureValueEl = document.querySelector("#gestureValue");
 const gestureHintEl = document.querySelector("#gestureHint");
+const ribbonStatusEl = document.querySelector("#ribbonStatus");
 const trackingStateEl = document.querySelector("#trackingState");
 const trainerHintEl = document.querySelector("#trainerHint");
 const gestureTrainerGridEl = document.querySelector("#gestureTrainerGrid");
@@ -21,6 +22,14 @@ const exportCustomGesturesButton = document.querySelector("#exportCustomGestures
 const importCustomGesturesButton = document.querySelector("#importCustomGestures");
 const importCustomGesturesInput = document.querySelector("#importCustomGesturesInput");
 const resetCustomGesturesButton = document.querySelector("#resetCustomGestures");
+const ribbonHintEl = document.querySelector("#ribbonHint");
+const ribbonGestureCountEl = document.querySelector("#ribbonGestureCount");
+const saveRibbonGestureButton = document.querySelector("#saveRibbonGesture");
+const clearRibbonGestureButton = document.querySelector("#clearRibbonGesture");
+const specialEffectTypeEl = document.querySelector("#specialEffectType");
+const specialEffectHoldSecondsEl = document.querySelector("#specialEffectHoldSeconds");
+const ribbonProtectionSecondsEl = document.querySelector("#ribbonProtectionSeconds");
+const digitHoldSecondsEl = document.querySelector("#digitHoldSeconds");
 
 const DIGIT_COLORS = [
   ["#7cf5c0", "#3f8cff"],
@@ -44,8 +53,20 @@ const SPECIAL_DIGIT_EFFECTS = {
 
 const CUSTOM_DIGIT_FOLDER = "./assets/custom-png";
 const CUSTOM_GESTURES_STORAGE_KEY = "gestureParticles.customGestures.v1";
+const RIBBON_GESTURES_STORAGE_KEY = "gestureParticles.ribbonGestures.v1";
+const RIBBON_CONFIG_STORAGE_KEY = "gestureParticles.ribbonConfig.v1";
+const DIGIT_CONFIG_STORAGE_KEY = "gestureParticles.digitConfig.v1";
 const PRELOADED_GESTURES_URL = "./assets/gesture-samples.json";
 const GESTURE_CHANGE_SOUND_URL = "./assets/audio/gesture-change.wav";
+const SPECIAL_EFFECT_MATCH_THRESHOLD = 0.2;
+const DEFAULT_RIBBON_CONFIG = {
+  effectType: "ribbon",
+  holdSeconds: 0.2,
+  protectionSeconds: 1.5
+};
+const DEFAULT_DIGIT_CONFIG = {
+  holdSeconds: 0.3
+};
 const textureLoader = new THREE.TextureLoader();
 const digitTextures = new Map();
 const customDigitChecks = new Map();
@@ -53,6 +74,7 @@ const trainerSlotElements = new Map();
 let currentDigit = null;
 let pendingDigit = null;
 let pendingFrames = 0;
+let pendingSince = 0;
 let lastLandmarkTime = 0;
 let activeStream = null;
 let isProcessingFrame = false;
@@ -61,6 +83,14 @@ let cameraState = "idle";
 let latestGestureVector = null;
 let isTrainerPanelCollapsed = false;
 let customGestureLibrary = loadStoredGestureLibrary();
+let ribbonGestureLibrary = loadStoredRibbonGestureLibrary();
+let ribbonConfig = loadStoredRibbonConfig();
+let digitConfig = loadStoredDigitConfig();
+let ribbonPendingMatchSince = 0;
+let ribbonTriggeredCurrentHold = false;
+let ribbonLastTriggerTime = 0;
+let ribbonEffectProtectionUntil = 0;
+let ribbonStatusResetTimer = 0;
 let isDraggingFloatingCamera = false;
 let isFloatingCameraVisible = true;
 let floatingCameraOffset = { x: 0, y: 0 };
@@ -77,6 +107,30 @@ function playGestureChangeSound(digit) {
   const sound = gestureChangeSound.cloneNode();
   sound.volume = 0.6 + digit * 0.018;
   sound.play().catch(() => {});
+}
+
+function updateRibbonStatus(text, isActive = false) {
+  ribbonStatusEl.textContent = text;
+  ribbonStatusEl.classList.toggle("is-active", isActive);
+}
+
+function queueRibbonStatusReset(delayMs = 1400) {
+  if (ribbonStatusResetTimer) {
+    window.clearTimeout(ribbonStatusResetTimer);
+  }
+
+  ribbonStatusResetTimer = window.setTimeout(() => {
+    ribbonStatusResetTimer = 0;
+    updateRibbonStatus(getSpecialEffectReadyStateText(), false);
+  }, delayMs);
+}
+
+function getSelectedSpecialEffectLabel() {
+  return ribbonConfig.effectType === "fireworks" ? "Fireworks" : "Ribbon Cutting";
+}
+
+function getSpecialEffectReadyStateText() {
+  return ribbonGestureLibrary.length ? "Ready" : "Not ready";
 }
 
 function updateCaptureButton() {
@@ -107,13 +161,18 @@ function stopCamera(options = {}) {
 
   isProcessingFrame = false;
   latestGestureVector = null;
+  ribbonPendingMatchSince = 0;
+  ribbonTriggeredCurrentHold = false;
   pendingDigit = null;
   pendingFrames = 0;
+  pendingSince = 0;
+  ribbonEffectProtectionUntil = 0;
   lastLandmarkTime = 0;
   videoElement.pause();
   videoElement.srcObject = null;
   handCanvasCtx.clearRect(0, 0, handCanvas.width, handCanvas.height);
   cameraState = "stopped";
+  updateRibbonStatus("Idle", false);
   trackingStateEl.textContent = "Capture stopped";
   if (!preserveHint) {
     gestureHintEl.textContent = "Capture stopped. Start the camera to continue gesture tracking.";
@@ -162,6 +221,189 @@ function loadStoredGestureLibrary() {
   } catch {
     return createEmptyGestureLibrary();
   }
+}
+
+function createEmptyRibbonGestureLibrary() {
+  return [];
+}
+
+function normalizeRibbonGestureLibrary(candidate) {
+  if (Array.isArray(candidate)) {
+    return candidate.filter((sample) => Array.isArray(sample) && sample.length === 63);
+  }
+
+  if (Array.isArray(candidate?.samples)) {
+    return candidate.samples.filter((sample) => Array.isArray(sample) && sample.length === 63);
+  }
+
+  if (Array.isArray(candidate?.A)) {
+    return candidate.A.filter((sample) => Array.isArray(sample) && sample.length === 63);
+  }
+
+  return [];
+}
+
+function loadStoredRibbonGestureLibrary() {
+  try {
+    const raw = window.localStorage.getItem(RIBBON_GESTURES_STORAGE_KEY);
+    if (!raw) {
+      return createEmptyRibbonGestureLibrary();
+    }
+    return normalizeRibbonGestureLibrary(JSON.parse(raw));
+  } catch {
+    return createEmptyRibbonGestureLibrary();
+  }
+}
+
+function persistRibbonGestureLibrary() {
+  window.localStorage.setItem(RIBBON_GESTURES_STORAGE_KEY, JSON.stringify(ribbonGestureLibrary));
+}
+
+function normalizeRibbonConfig(candidate) {
+  const effectType = candidate?.effectType === "fireworks" ? "fireworks" : DEFAULT_RIBBON_CONFIG.effectType;
+  const holdSeconds = THREE.MathUtils.clamp(Number(candidate?.holdSeconds) || DEFAULT_RIBBON_CONFIG.holdSeconds, 0.05, 2);
+  const protectionSeconds = THREE.MathUtils.clamp(Number(candidate?.protectionSeconds) || DEFAULT_RIBBON_CONFIG.protectionSeconds, 0.2, 5);
+  return { effectType, holdSeconds, protectionSeconds };
+}
+
+function loadStoredRibbonConfig() {
+  try {
+    const raw = window.localStorage.getItem(RIBBON_CONFIG_STORAGE_KEY);
+    if (!raw) {
+      return { ...DEFAULT_RIBBON_CONFIG };
+    }
+    return normalizeRibbonConfig(JSON.parse(raw));
+  } catch {
+    return { ...DEFAULT_RIBBON_CONFIG };
+  }
+}
+
+function normalizeDigitConfig(candidate) {
+  const holdSeconds = THREE.MathUtils.clamp(Number(candidate?.holdSeconds) || DEFAULT_DIGIT_CONFIG.holdSeconds, 0.05, 2);
+  return { holdSeconds };
+}
+
+function loadStoredDigitConfig() {
+  try {
+    const raw = window.localStorage.getItem(DIGIT_CONFIG_STORAGE_KEY);
+    if (!raw) {
+      return { ...DEFAULT_DIGIT_CONFIG };
+    }
+    return normalizeDigitConfig(JSON.parse(raw));
+  } catch {
+    return { ...DEFAULT_DIGIT_CONFIG };
+  }
+}
+
+function persistDigitConfig() {
+  window.localStorage.setItem(DIGIT_CONFIG_STORAGE_KEY, JSON.stringify(digitConfig));
+}
+
+function persistRibbonConfig() {
+  window.localStorage.setItem(RIBBON_CONFIG_STORAGE_KEY, JSON.stringify(ribbonConfig));
+}
+
+function updateRibbonTrainerUi() {
+  ribbonGestureCountEl.textContent = ribbonGestureLibrary.length === 1 ? "1 sample" : `${ribbonGestureLibrary.length} samples`;
+
+  specialEffectTypeEl.value = ribbonConfig.effectType;
+  specialEffectHoldSecondsEl.value = ribbonConfig.holdSeconds.toFixed(2);
+  ribbonProtectionSecondsEl.value = ribbonConfig.protectionSeconds.toFixed(1);
+  digitHoldSecondsEl.value = digitConfig.holdSeconds.toFixed(2);
+
+  const sampleReady = ribbonGestureLibrary.length > 0;
+
+  if (!sampleReady) {
+    ribbonHintEl.textContent = "Save one effect gesture to enable direct special-effect triggering.";
+    updateRibbonStatus("Not ready", false);
+    return;
+  }
+
+  ribbonHintEl.textContent = `Saved effect gesture will trigger ${getSelectedSpecialEffectLabel()}.`;
+  updateRibbonStatus(getSpecialEffectReadyStateText(), false);
+}
+
+function updateDigitConfigFromInputs() {
+  digitConfig = normalizeDigitConfig({ holdSeconds: digitHoldSecondsEl.value });
+  persistDigitConfig();
+  digitHoldSecondsEl.value = digitConfig.holdSeconds.toFixed(2);
+}
+
+function saveRibbonGesture() {
+  if (!latestGestureVector || performance.now() - lastLandmarkTime > 600) {
+    ribbonHintEl.textContent = "Show a clearly tracked hand before saving the special-effect gesture.";
+    return;
+  }
+
+  ribbonGestureLibrary.push([...latestGestureVector]);
+  persistRibbonGestureLibrary();
+  updateRibbonTrainerUi();
+  ribbonHintEl.textContent = `Saved current pose as the ${getSelectedSpecialEffectLabel()} trigger gesture.`;
+}
+
+function clearRibbonGestures() {
+  ribbonGestureLibrary = [];
+  persistRibbonGestureLibrary();
+  updateRibbonTrainerUi();
+}
+
+function updateRibbonConfigFromInputs() {
+  ribbonConfig = normalizeRibbonConfig({
+    effectType: specialEffectTypeEl.value,
+    holdSeconds: specialEffectHoldSecondsEl.value,
+    protectionSeconds: ribbonProtectionSecondsEl.value
+  });
+
+  persistRibbonConfig();
+  ribbonPendingMatchSince = 0;
+  ribbonTriggeredCurrentHold = false;
+  updateRibbonTrainerUi();
+}
+
+function getRibbonGestureMatchScore(gestureVector, samples) {
+  let best = Number.POSITIVE_INFINITY;
+  for (const sample of samples) {
+    best = Math.min(best, getGestureDistance(gestureVector, sample));
+  }
+  return best;
+}
+
+function isRibbonGestureMatched(gestureVector) {
+  if (!gestureVector || !ribbonGestureLibrary.length) {
+    return false;
+  }
+
+  return getRibbonGestureMatchScore(gestureVector, ribbonGestureLibrary) <= SPECIAL_EFFECT_MATCH_THRESHOLD;
+}
+
+function triggerConfiguredSpecialEffect(eventTime) {
+  if (eventTime - ribbonLastTriggerTime < 800) {
+    return;
+  }
+
+  ribbonLastTriggerTime = eventTime;
+  ribbonEffectProtectionUntil = eventTime + ribbonConfig.protectionSeconds * 1000;
+  ribbonPendingMatchSince = 0;
+  ribbonTriggeredCurrentHold = true;
+  pendingDigit = null;
+  pendingFrames = 0;
+  pendingSince = 0;
+  currentDigit = null;
+  gestureValueEl.textContent = "--";
+  gestureHintEl.textContent = "Special effect active.";
+  sceneController.activateSpecialEffectOnly(ribbonConfig.protectionSeconds);
+
+  if (ribbonConfig.effectType === "fireworks") {
+    ribbonHintEl.textContent = "Special-effect gesture matched. Triggered fireworks.";
+    updateRibbonStatus("Fireworks", true);
+    sceneController.triggerFireworkCelebration();
+  } else {
+    ribbonHintEl.textContent = "Special-effect gesture matched. Triggered ribbon cutting.";
+    updateRibbonStatus("Ribbon Cutting", true);
+    sceneController.triggerRibbonCutEffect();
+  }
+
+  queueRibbonStatusReset();
 }
 
 function hasStoredGestureLibrary() {
@@ -440,7 +682,7 @@ function classifyRecognizedDigit(landmarks, gestureVector) {
     return customDigit;
   }
 
-  return classifyDigit(landmarks);
+  return null;
 }
 
 function updateTrainerPanelVisibility() {
@@ -494,6 +736,10 @@ function clearGestureTemplates(digit) {
   persistGestureLibrary();
   renderGestureTrainer();
   trainerHintEl.textContent = `Cleared saved custom gestures for digit ${digit}.`;
+
+  if (digit === 0 && currentDigit === 0) {
+    sceneController.setSpecialEffect(0);
+  }
 }
 
 function resetAllGestureTemplates() {
@@ -501,6 +747,10 @@ function resetAllGestureTemplates() {
   persistGestureLibrary();
   renderGestureTrainer();
   trainerHintEl.textContent = "Cleared all saved custom gestures.";
+
+  if (currentDigit === 0) {
+    sceneController.setSpecialEffect(0);
+  }
 }
 
 function initializeGestureTrainer() {
@@ -551,8 +801,15 @@ function initializeGestureTrainer() {
   importCustomGesturesButton.addEventListener("click", triggerGestureImport);
   importCustomGesturesInput.addEventListener("change", handleGestureImport);
   resetCustomGesturesButton.addEventListener("click", resetAllGestureTemplates);
+  saveRibbonGestureButton.addEventListener("click", saveRibbonGesture);
+  clearRibbonGestureButton.addEventListener("click", clearRibbonGestures);
+  specialEffectTypeEl.addEventListener("change", updateRibbonConfigFromInputs);
+  specialEffectHoldSecondsEl.addEventListener("change", updateRibbonConfigFromInputs);
+  ribbonProtectionSecondsEl.addEventListener("change", updateRibbonConfigFromInputs);
+  digitHoldSecondsEl.addEventListener("change", updateDigitConfigFromInputs);
   updateTrainerPanelVisibility();
   renderGestureTrainer();
+  updateRibbonTrainerUi();
 }
 
 
@@ -765,77 +1022,14 @@ function ensureDigitTexture(digit) {
   return entry;
 }
 
-function classifyDigit(landmarks) {
-  const palmSize = Math.max(distance2D(landmarks[0], landmarks[9]), 0.08);
-  const fingerExtended = {
-    index: isFingerExtended(landmarks, 8, 6, 5),
-    middle: isFingerExtended(landmarks, 12, 10, 9),
-    ring: isFingerExtended(landmarks, 16, 14, 13),
-    pinky: isFingerExtended(landmarks, 20, 18, 17)
-  };
-
-  const thumbSpread = distance2D(landmarks[4], landmarks[5]) / palmSize;
-  const thumbOpen = thumbSpread > 0.62;
-  const touchThreshold = palmSize * 0.58;
-  const thumbTouches = {
-    index: distance2D(landmarks[4], landmarks[8]) < touchThreshold,
-    middle: distance2D(landmarks[4], landmarks[12]) < touchThreshold,
-    ring: distance2D(landmarks[4], landmarks[16]) < touchThreshold,
-    pinky: distance2D(landmarks[4], landmarks[20]) < touchThreshold
-  };
-
-  const extendedCount = Object.values(fingerExtended).filter(Boolean).length;
-  const fingertipCluster =
-    (distance2D(landmarks[4], landmarks[8]) +
-      distance2D(landmarks[4], landmarks[12]) +
-      distance2D(landmarks[4], landmarks[16]) +
-      distance2D(landmarks[4], landmarks[20])) /
-    (4 * palmSize);
-
-  if (fingertipCluster < 0.64) {
-    return 0;
-  }
-
-  if (thumbTouches.index && fingerExtended.middle && fingerExtended.ring && fingerExtended.pinky) {
-    return 9;
-  }
-
-  if (thumbTouches.middle && fingerExtended.index && fingerExtended.ring && fingerExtended.pinky) {
-    return 8;
-  }
-
-  if (thumbTouches.ring && fingerExtended.index && fingerExtended.middle && fingerExtended.pinky) {
-    return 7;
-  }
-
-  if (thumbTouches.pinky && fingerExtended.index && fingerExtended.middle && fingerExtended.ring) {
-    return 6;
-  }
-
-  if (extendedCount === 4 && thumbOpen) {
-    return 5;
-  }
-
-  if (extendedCount === 4 && !thumbOpen) {
-    return 4;
-  }
-
-  if (fingerExtended.index && fingerExtended.middle && !fingerExtended.ring && !fingerExtended.pinky && thumbOpen) {
-    return 3;
-  }
-
-  if (fingerExtended.index && fingerExtended.middle && !fingerExtended.ring && !fingerExtended.pinky && !thumbOpen) {
-    return 2;
-  }
-
-  if (fingerExtended.index && !fingerExtended.middle && !fingerExtended.ring && !fingerExtended.pinky) {
-    return 1;
-  }
-
-  return null;
-}
-
 function updateGesture(digit) {
+  if (performance.now() < ribbonEffectProtectionUntil) {
+    pendingDigit = null;
+    pendingFrames = 0;
+    pendingSince = 0;
+    return;
+  }
+
   if (digit === null) {
     return;
   }
@@ -843,11 +1037,13 @@ function updateGesture(digit) {
   if (pendingDigit !== digit) {
     pendingDigit = digit;
     pendingFrames = 1;
+    pendingSince = performance.now();
     return;
   }
 
   pendingFrames += 1;
-  if (pendingFrames < 4 || currentDigit === digit) {
+  const holdMs = digitConfig.holdSeconds * 1000;
+  if (performance.now() - pendingSince < holdMs || currentDigit === digit) {
     return;
   }
 
@@ -871,7 +1067,12 @@ function resetGestureStatus() {
 
   pendingDigit = null;
   pendingFrames = 0;
+  pendingSince = 0;
   latestGestureVector = null;
+  ribbonPendingMatchSince = 0;
+  ribbonTriggeredCurrentHold = false;
+  ribbonEffectProtectionUntil = 0;
+  updateRibbonStatus("Idle", false);
   trackingStateEl.textContent = "Searching for hand";
   if (currentDigit === null) {
     gestureHintEl.textContent = "Show one hand inside the camera frame with a number gesture from 0 to 9.";
@@ -1036,8 +1237,11 @@ class ParticleSceneController {
     this.activeEffect = null;
     this.wordArtTexture = null;
     this.lastFireworkSpawn = 0;
+    this.fireworkCelebrationUntil = 0;
     this.fireworkBurstCount = 0;
     this.fireworksEnabled = false;
+    this.ribbonEffectProgress = 0;
+    this.ribbonEffectActive = false;
 
     this.scene.add(new THREE.AmbientLight(0xffffff, 1.2));
 
@@ -1088,6 +1292,46 @@ class ParticleSceneController {
     this.effectSprite.position.set(0, 4.4, 0.8);
     this.effectSprite.scale.set(0, 0, 1);
     this.scene.add(this.effectSprite);
+
+    this.ribbonLeft = new THREE.Mesh(
+      new THREE.PlaneGeometry(5.6, 0.38),
+      new THREE.MeshBasicMaterial({ color: 0xff4f6f, transparent: true, opacity: 0, depthWrite: false })
+    );
+    this.ribbonRight = new THREE.Mesh(
+      new THREE.PlaneGeometry(5.6, 0.38),
+      new THREE.MeshBasicMaterial({ color: 0x45d9a6, transparent: true, opacity: 0, depthWrite: false })
+    );
+    this.ribbonLeft.position.set(-7, 0.2, 0.4);
+    this.ribbonRight.position.set(7, -0.2, 0.4);
+    this.scene.add(this.ribbonLeft);
+    this.scene.add(this.ribbonRight);
+
+    this.scissorPivot = new THREE.Group();
+    this.scissorPivot.position.set(0, 0, 1.2);
+    this.scene.add(this.scissorPivot);
+
+    const bladeMaterial = new THREE.MeshBasicMaterial({ color: 0xd9e2f1, transparent: true, opacity: 0, depthWrite: false });
+    const bladeGeometry = new THREE.PlaneGeometry(2.4, 0.16);
+    this.scissorBladeTop = new THREE.Mesh(bladeGeometry, bladeMaterial.clone());
+    this.scissorBladeBottom = new THREE.Mesh(bladeGeometry, bladeMaterial.clone());
+    this.scissorBladeTop.position.set(1.05, 0, 0);
+    this.scissorBladeBottom.position.set(1.05, 0, 0);
+    this.scissorPivot.add(this.scissorBladeTop);
+    this.scissorPivot.add(this.scissorBladeBottom);
+
+    this.scissorHandleTop = new THREE.Mesh(
+      new THREE.RingGeometry(0.22, 0.35, 28),
+      new THREE.MeshBasicMaterial({ color: 0xffcb70, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide })
+    );
+    this.scissorHandleBottom = new THREE.Mesh(
+      new THREE.RingGeometry(0.22, 0.35, 28),
+      new THREE.MeshBasicMaterial({ color: 0xffcb70, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide })
+    );
+    this.scissorHandleTop.position.set(-0.35, 0.16, 0);
+    this.scissorHandleBottom.position.set(-0.35, -0.16, 0);
+    this.scissorPivot.add(this.scissorHandleTop);
+    this.scissorPivot.add(this.scissorHandleBottom);
+    this.scissorPivot.visible = false;
 
     this.bgParticleCount = 560;
     this.bgPositions = new Float32Array(this.bgParticleCount * 3);
@@ -1179,6 +1423,7 @@ class ParticleSceneController {
   }
 
   async setDigitTexture(digit, texture, imageUrl) {
+    this.digitPoints.visible = true;
     this.paletteA.set(DIGIT_COLORS[digit][0]);
     this.paletteB.set(DIGIT_COLORS[digit][1]);
     const currentToken = ++this.morphToken;
@@ -1207,7 +1452,9 @@ class ParticleSceneController {
   }
 
   setSpecialEffect(digit) {
-    const effectConfig = SPECIAL_DIGIT_EFFECTS[digit] || null;
+    const hasDigitZeroSample = customGestureLibrary[String(0)]?.length > 0;
+    const zeroEffectAllowed = digit !== 0 || hasDigitZeroSample;
+    const effectConfig = zeroEffectAllowed ? SPECIAL_DIGIT_EFFECTS[digit] || null : null;
     this.activeEffectDigit = digit;
     this.activeEffect = effectConfig;
     this.fireworksEnabled = effectConfig?.kind === "fireworks";
@@ -1296,6 +1543,49 @@ class ParticleSceneController {
     this.fireworkGeometry.attributes.color.needsUpdate = true;
   }
 
+  triggerRibbonCutEffect() {
+    this.ribbonEffectActive = true;
+    this.ribbonEffectProgress = 0;
+    this.ribbonLeft.position.set(-7, 0.22, 0.4);
+    this.ribbonRight.position.set(7, -0.22, 0.4);
+    this.ribbonLeft.rotation.z = 0;
+    this.ribbonRight.rotation.z = 0;
+    this.ribbonLeft.material.opacity = 0.98;
+    this.ribbonRight.material.opacity = 0.98;
+    this.scissorPivot.visible = true;
+    this.scissorPivot.position.set(4.8, 2.2, 1.2);
+    this.scissorPivot.rotation.z = -0.28;
+    this.scissorBladeTop.rotation.z = 0.34;
+    this.scissorBladeBottom.rotation.z = -0.34;
+    this.scissorBladeTop.material.opacity = 0.96;
+    this.scissorBladeBottom.material.opacity = 0.96;
+    this.scissorHandleTop.material.opacity = 0.9;
+    this.scissorHandleBottom.material.opacity = 0.9;
+
+    for (let index = 0; index < 7; index += 1) {
+      this.spawnFireworkBurst();
+    }
+  }
+
+  triggerFireworkCelebration() {
+    this.fireworkMaterial.opacity = 1;
+    this.fireworkPoints.visible = true;
+    this.lastFireworkSpawn = this.clock.getElapsedTime();
+    this.fireworkCelebrationUntil = this.lastFireworkSpawn + 1.6;
+
+    for (let index = 0; index < 8; index += 1) {
+      this.spawnFireworkBurst();
+    }
+  }
+
+  activateSpecialEffectOnly(durationSeconds) {
+    this.digitPoints.visible = false;
+    this.effectSprite.visible = false;
+    this.effectSprite.material.opacity = 0;
+    this.activeEffect = null;
+    this.fireworksEnabled = false;
+  }
+
   handleResize() {
     const bounds = this.canvas.getBoundingClientRect();
     const width = Math.max(bounds.width, 320);
@@ -1353,7 +1643,68 @@ class ParticleSceneController {
       this.effectSprite.material.opacity *= 0.92;
     }
 
-    if (this.fireworksEnabled) {
+    if (this.ribbonEffectActive) {
+      this.ribbonEffectProgress += 1 / 60;
+      const t = this.ribbonEffectProgress;
+
+      if (t < 0.34) {
+        const k = t / 0.34;
+        this.ribbonLeft.position.x = THREE.MathUtils.lerp(-7, -0.6, k);
+        this.ribbonRight.position.x = THREE.MathUtils.lerp(7, 0.6, k);
+        this.ribbonLeft.position.y = 0.22;
+        this.ribbonRight.position.y = -0.22;
+        this.scissorPivot.visible = true;
+        this.scissorPivot.position.x = THREE.MathUtils.lerp(4.8, 0.65, k);
+        this.scissorPivot.position.y = THREE.MathUtils.lerp(2.2, 0.32, k);
+        this.scissorPivot.rotation.z = THREE.MathUtils.lerp(-0.28, -0.06, k);
+        this.scissorBladeTop.rotation.z = THREE.MathUtils.lerp(0.34, 0.22, k);
+        this.scissorBladeBottom.rotation.z = THREE.MathUtils.lerp(-0.34, -0.22, k);
+      } else if (t < 0.58) {
+        const cut = (t - 0.34) / 0.24;
+        this.scissorPivot.position.x = 0.65;
+        this.scissorPivot.position.y = 0.32;
+        this.scissorPivot.rotation.z = -0.06 + Math.sin(t * 42) * 0.015;
+        this.scissorBladeTop.rotation.z = THREE.MathUtils.lerp(0.22, 0.02, cut);
+        this.scissorBladeBottom.rotation.z = THREE.MathUtils.lerp(-0.22, -0.02, cut);
+        this.ribbonLeft.position.x = -0.6;
+        this.ribbonRight.position.x = 0.6;
+        this.ribbonLeft.position.y = 0.22;
+        this.ribbonRight.position.y = -0.22;
+      } else {
+        const split = THREE.MathUtils.clamp((t - 0.58) / 0.7, 0, 1);
+        this.ribbonLeft.position.x = -0.6 - split * 4.8;
+        this.ribbonRight.position.x = 0.6 + split * 4.8;
+        this.ribbonLeft.position.y = 0.22 + split * 1.4;
+        this.ribbonRight.position.y = -0.22 - split * 1.2;
+        this.ribbonLeft.rotation.z = split * 0.48;
+        this.ribbonRight.rotation.z = -split * 0.54;
+        this.scissorBladeTop.rotation.z = 0.02;
+        this.scissorBladeBottom.rotation.z = -0.02;
+        this.scissorPivot.position.x = 0.65 + split * 1.25;
+        this.scissorPivot.position.y = 0.32 + split * 0.95;
+        this.scissorPivot.rotation.z = -0.06 - split * 0.24;
+        const scissorFade = 1 - split;
+        this.scissorBladeTop.material.opacity = scissorFade;
+        this.scissorBladeBottom.material.opacity = scissorFade;
+        this.scissorHandleTop.material.opacity = scissorFade;
+        this.scissorHandleBottom.material.opacity = scissorFade;
+        const fade = 1 - split;
+        this.ribbonLeft.material.opacity = fade;
+        this.ribbonRight.material.opacity = fade;
+      }
+
+      if (t > 1.3) {
+        this.ribbonEffectActive = false;
+        this.ribbonLeft.material.opacity = 0;
+        this.ribbonRight.material.opacity = 0;
+        this.scissorPivot.visible = false;
+      }
+    }
+
+    const fireworksBurstActive = this.fireworkCelebrationUntil && elapsed < this.fireworkCelebrationUntil;
+    const fireworksActive = this.fireworksEnabled || fireworksBurstActive;
+
+    if (fireworksActive) {
       this.fireworkPoints.visible = true;
       this.camera.position.x = Math.sin(elapsed * 0.72) * 0.18;
       this.camera.position.y = Math.cos(elapsed * 0.64) * 0.14;
@@ -1368,7 +1719,7 @@ class ParticleSceneController {
       const i3 = index * 3;
 
       if (!particle.active) {
-        if (!this.fireworksEnabled) {
+        if (!fireworksActive) {
           this.fireworkPositions[i3 + 1] = -30;
         }
         continue;
@@ -1394,7 +1745,7 @@ class ParticleSceneController {
       particle.alpha = fade;
     }
 
-    this.fireworkMaterial.opacity = this.fireworksEnabled ? 0.95 : Math.max(this.fireworkMaterial.opacity * 0.95, 0);
+    this.fireworkMaterial.opacity = fireworksActive ? 0.95 : Math.max(this.fireworkMaterial.opacity * 0.95, 0);
 
     this.digitGeometry.attributes.position.needsUpdate = true;
     this.bgGeometry.attributes.position.needsUpdate = true;
@@ -1451,11 +1802,36 @@ function drawHandResults(results) {
 
       lastLandmarkTime = performance.now();
       latestGestureVector = buildGestureVector(landmarks);
+
       const digit = classifyRecognizedDigit(landmarks, latestGestureVector);
-      updateGesture(digit);
+      if (digit !== null) {
+        updateGesture(digit);
+      } else {
+        const now = performance.now();
+
+        if (now >= ribbonEffectProtectionUntil) {
+          const ribbonMatched = isRibbonGestureMatched(latestGestureVector);
+          if (ribbonMatched) {
+            if (!ribbonPendingMatchSince) {
+              ribbonPendingMatchSince = now;
+              ribbonTriggeredCurrentHold = false;
+            }
+
+            if (!ribbonTriggeredCurrentHold && now - ribbonPendingMatchSince >= ribbonConfig.holdSeconds * 1000) {
+              triggerConfiguredSpecialEffect(now);
+            }
+          } else {
+            ribbonPendingMatchSince = 0;
+            ribbonTriggeredCurrentHold = false;
+          }
+        }
+      }
+      
     }
   } else {
     latestGestureVector = null;
+    ribbonPendingMatchSince = 0;
+    ribbonTriggeredCurrentHold = false;
     resetGestureStatus();
   }
 

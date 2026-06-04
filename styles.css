@@ -95,6 +95,31 @@ body::after {
   color: var(--muted);
 }
 
+.ribbon-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  margin: 0.58rem 0 0;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.ribbon-status-value {
+  font-size: 0.83rem;
+  color: var(--muted);
+  padding: 0.22rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.ribbon-status-value.is-active {
+  color: #fff8e5;
+  border-color: rgba(255, 206, 107, 0.55);
+  background: rgba(255, 170, 76, 0.28);
+}
+
 .status-strip {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -164,6 +189,38 @@ body::after {
   font-size: 0.9rem;
   line-height: 1.45;
   color: var(--muted);
+}
+
+.digit-config-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px);
+  justify-content: end;
+}
+
+.digit-config-item {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.digit-config-item input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.digit-config-item input:focus {
+  outline: 2px solid rgba(124, 245, 192, 0.45);
+  outline-offset: 1px;
 }
 
 .ghost-button {
@@ -239,6 +296,101 @@ body::after {
   min-height: 1.2rem;
   font-size: 0.78rem;
   color: var(--muted);
+}
+
+.ribbon-trainer {
+  display: grid;
+  gap: 0.85rem;
+  margin-top: 0.25rem;
+  padding: 0.9rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ribbon-trainer-header {
+  display: grid;
+  gap: 0.35rem;
+}
+
+#ribbonHint {
+  margin: 0;
+  font-size: 0.86rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.ribbon-gesture-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.7rem;
+}
+
+.ribbon-gesture-card {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.75rem;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ribbon-gesture-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.ribbon-gesture-card-header strong {
+  font-family: "Sora", sans-serif;
+  font-size: 0.95rem;
+}
+
+.ribbon-gesture-card-actions {
+  display: flex;
+  gap: 0.45rem;
+}
+
+.ribbon-gesture-card-actions .ghost-button {
+  flex: 1;
+  border-radius: 12px;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.82rem;
+}
+
+.ribbon-config-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.ribbon-config-item {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.ribbon-config-item select,
+.ribbon-config-item input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.ribbon-config-item select:focus,
+.ribbon-config-item input:focus {
+  outline: 2px solid rgba(124, 245, 192, 0.45);
+  outline-offset: 1px;
 }
 
 .status-card {
@@ -439,6 +591,10 @@ body::after {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .ribbon-config-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .scene-card {
     min-height: 520px;
   }
@@ -482,6 +638,11 @@ body::after {
     width: 100%;
   }
 
+  .digit-config-row {
+    grid-template-columns: 1fr;
+    justify-content: stretch;
+  }
+
   .scene-header-actions {
     width: 100%;
     justify-content: space-between;
@@ -493,6 +654,11 @@ body::after {
   }
 
   .gesture-trainer-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ribbon-gesture-grid,
+  .ribbon-config-grid {
     grid-template-columns: 1fr;
   }
 }

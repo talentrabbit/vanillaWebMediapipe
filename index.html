@@ -20,6 +20,10 @@
         <span class="status-label">Detected digit</span>
         <strong id="gestureValue">--</strong>
         <p id="gestureHint">Allow camera access and hold one digit steady for a moment.</p>
+        <p class="ribbon-status-row">
+          <span class="status-label">Special Effect</span>
+          <span id="ribbonStatus" class="ribbon-status-value">Idle</span>
+        </p>
       </article>
     </section>
 
@@ -38,7 +42,53 @@
             <button id="resetCustomGestures" class="ghost-button" type="button">Reset all gestures</button>
           </div>
           <p id="trainerHint">Hold a pose in frame, then save it to a digit. Saved gestures stay in this browser.</p>
+          <div class="digit-config-row" aria-label="Digit recognition settings">
+            <label class="digit-config-item" for="digitHoldSeconds">
+              <span>Digit hold (seconds)</span>
+              <input id="digitHoldSeconds" type="number" min="0.05" max="2" step="0.05" value="0.30" />
+            </label>
+          </div>
           <div id="gestureTrainerGrid" class="gesture-trainer-grid"></div>
+
+          <section class="ribbon-trainer" aria-label="Special effect trainer">
+            <div class="ribbon-trainer-header">
+              <span class="status-label">Special Effect Trainer</span>
+              <p id="ribbonHint">Save one pose, then choose whether that gesture should trigger Ribbon Cutting or Fireworks.</p>
+            </div>
+
+            <div class="ribbon-gesture-grid">
+              <article class="ribbon-gesture-card">
+                <div class="ribbon-gesture-card-header">
+                  <strong>Effect Gesture</strong>
+                  <span id="ribbonGestureCount" class="gesture-sample-count">0 samples</span>
+                </div>
+                <div class="ribbon-gesture-card-actions">
+                  <button id="saveRibbonGesture" class="ghost-button" type="button">Save current pose</button>
+                  <button id="clearRibbonGesture" class="ghost-button danger-button" type="button">Clear</button>
+                </div>
+              </article>
+            </div>
+
+            <div class="ribbon-config-grid">
+              <label class="ribbon-config-item" for="specialEffectType">
+                <span>Special effect</span>
+                <select id="specialEffectType">
+                  <option value="ribbon">Ribbon Cutting</option>
+                  <option value="fireworks">Fireworks</option>
+                </select>
+              </label>
+
+              <label class="ribbon-config-item" for="specialEffectHoldSeconds">
+                <span>Special effect hold (seconds)</span>
+                <input id="specialEffectHoldSeconds" type="number" min="0.05" max="2" step="0.05" value="0.16" />
+              </label>
+
+              <label class="ribbon-config-item" for="ribbonProtectionSeconds">
+                <span>Effect protection (seconds)</span>
+                <input id="ribbonProtectionSeconds" type="number" min="0.2" max="5" step="0.1" value="1.5" />
+              </label>
+            </div>
+          </section>
         </div>
         <input id="importCustomGesturesInput" type="file" accept="application/json,.json" hidden />
       </article>
