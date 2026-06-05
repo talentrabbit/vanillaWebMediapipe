@@ -361,7 +361,7 @@ body::after {
 
 .ribbon-config-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 0.65rem;
 }
 
@@ -447,6 +447,16 @@ body::after {
   align-items: center;
   justify-content: flex-end;
   gap: 0.75rem;
+}
+
+.camera-size-pill {
+  font-size: 0.78rem;
+  color: var(--muted);
+  padding: 0.3rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  white-space: nowrap;
 }
 
 .camera-toggle-button {

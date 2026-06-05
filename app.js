@@ -28,8 +28,10 @@ const saveRibbonGestureButton = document.querySelector("#saveRibbonGesture");
 const clearRibbonGestureButton = document.querySelector("#clearRibbonGesture");
 const specialEffectTypeEl = document.querySelector("#specialEffectType");
 const specialEffectHoldSecondsEl = document.querySelector("#specialEffectHoldSeconds");
+const specialEffectMatchWindowSecondsEl = document.querySelector("#specialEffectMatchWindowSeconds");
 const ribbonProtectionSecondsEl = document.querySelector("#ribbonProtectionSeconds");
 const digitHoldSecondsEl = document.querySelector("#digitHoldSeconds");
+const handSizePercentEl = document.querySelector("#handSizePercent");
 
 const DIGIT_COLORS = [
   ["#7cf5c0", "#3f8cff"],
@@ -59,13 +61,15 @@ const DIGIT_CONFIG_STORAGE_KEY = "gestureParticles.digitConfig.v1";
 const PRELOADED_GESTURES_URL = "./assets/gesture-samples.json";
 const GESTURE_CHANGE_SOUND_URL = "./assets/audio/gesture-change.wav";
 const SPECIAL_EFFECT_MATCH_THRESHOLD = 0.2;
+const MIN_HAND_SIZE_THRESHOLD = 0.10;
 const DEFAULT_RIBBON_CONFIG = {
   effectType: "ribbon",
-  holdSeconds: 0.2,
+  holdSeconds: 2,
+  matchWindowSeconds: 1,
   protectionSeconds: 1.5
 };
 const DEFAULT_DIGIT_CONFIG = {
-  holdSeconds: 0.3
+  holdSeconds: 0.15
 };
 const textureLoader = new THREE.TextureLoader();
 const digitTextures = new Map();
@@ -87,6 +91,7 @@ let ribbonGestureLibrary = loadStoredRibbonGestureLibrary();
 let ribbonConfig = loadStoredRibbonConfig();
 let digitConfig = loadStoredDigitConfig();
 let ribbonPendingMatchSince = 0;
+let ribbonPendingLastMatchedAt = 0;
 let ribbonTriggeredCurrentHold = false;
 let ribbonLastTriggerTime = 0;
 let ribbonEffectProtectionUntil = 0;
@@ -162,6 +167,7 @@ function stopCamera(options = {}) {
   isProcessingFrame = false;
   latestGestureVector = null;
   ribbonPendingMatchSince = 0;
+  ribbonPendingLastMatchedAt = 0;
   ribbonTriggeredCurrentHold = false;
   pendingDigit = null;
   pendingFrames = 0;
@@ -172,6 +178,7 @@ function stopCamera(options = {}) {
   videoElement.srcObject = null;
   handCanvasCtx.clearRect(0, 0, handCanvas.width, handCanvas.height);
   cameraState = "stopped";
+  handSizePercentEl.textContent = "Hand size: --";
   updateRibbonStatus("Idle", false);
   trackingStateEl.textContent = "Capture stopped";
   if (!preserveHint) {
@@ -261,9 +268,10 @@ function persistRibbonGestureLibrary() {
 
 function normalizeRibbonConfig(candidate) {
   const effectType = candidate?.effectType === "fireworks" ? "fireworks" : DEFAULT_RIBBON_CONFIG.effectType;
-  const holdSeconds = THREE.MathUtils.clamp(Number(candidate?.holdSeconds) || DEFAULT_RIBBON_CONFIG.holdSeconds, 0.05, 2);
+  const holdSeconds = THREE.MathUtils.clamp(Number(candidate?.holdSeconds) || DEFAULT_RIBBON_CONFIG.holdSeconds, 0.05, 5);
+  const matchWindowSeconds = THREE.MathUtils.clamp(Number(candidate?.matchWindowSeconds) || DEFAULT_RIBBON_CONFIG.matchWindowSeconds, 0.1, 5);
   const protectionSeconds = THREE.MathUtils.clamp(Number(candidate?.protectionSeconds) || DEFAULT_RIBBON_CONFIG.protectionSeconds, 0.2, 5);
-  return { effectType, holdSeconds, protectionSeconds };
+  return { effectType, holdSeconds, matchWindowSeconds, protectionSeconds };
 }
 
 function loadStoredRibbonConfig() {
@@ -308,6 +316,7 @@ function updateRibbonTrainerUi() {
 
   specialEffectTypeEl.value = ribbonConfig.effectType;
   specialEffectHoldSecondsEl.value = ribbonConfig.holdSeconds.toFixed(2);
+  specialEffectMatchWindowSecondsEl.value = ribbonConfig.matchWindowSeconds.toFixed(1);
   ribbonProtectionSecondsEl.value = ribbonConfig.protectionSeconds.toFixed(1);
   digitHoldSecondsEl.value = digitConfig.holdSeconds.toFixed(2);
 
@@ -351,11 +360,13 @@ function updateRibbonConfigFromInputs() {
   ribbonConfig = normalizeRibbonConfig({
     effectType: specialEffectTypeEl.value,
     holdSeconds: specialEffectHoldSecondsEl.value,
+    matchWindowSeconds: specialEffectMatchWindowSecondsEl.value,
     protectionSeconds: ribbonProtectionSecondsEl.value
   });
 
   persistRibbonConfig();
   ribbonPendingMatchSince = 0;
+  ribbonPendingLastMatchedAt = 0;
   ribbonTriggeredCurrentHold = false;
   updateRibbonTrainerUi();
 }
@@ -384,6 +395,7 @@ function triggerConfiguredSpecialEffect(eventTime) {
   ribbonLastTriggerTime = eventTime;
   ribbonEffectProtectionUntil = eventTime + ribbonConfig.protectionSeconds * 1000;
   ribbonPendingMatchSince = 0;
+  ribbonPendingLastMatchedAt = 0;
   ribbonTriggeredCurrentHold = true;
   pendingDigit = null;
   pendingFrames = 0;
@@ -805,6 +817,7 @@ function initializeGestureTrainer() {
   clearRibbonGestureButton.addEventListener("click", clearRibbonGestures);
   specialEffectTypeEl.addEventListener("change", updateRibbonConfigFromInputs);
   specialEffectHoldSecondsEl.addEventListener("change", updateRibbonConfigFromInputs);
+  specialEffectMatchWindowSecondsEl.addEventListener("change", updateRibbonConfigFromInputs);
   ribbonProtectionSecondsEl.addEventListener("change", updateRibbonConfigFromInputs);
   digitHoldSecondsEl.addEventListener("change", updateDigitConfigFromInputs);
   updateTrainerPanelVisibility();
@@ -1070,6 +1083,7 @@ function resetGestureStatus() {
   pendingSince = 0;
   latestGestureVector = null;
   ribbonPendingMatchSince = 0;
+  ribbonPendingLastMatchedAt = 0;
   ribbonTriggeredCurrentHold = false;
   ribbonEffectProtectionUntil = 0;
   updateRibbonStatus("Idle", false);
@@ -1791,14 +1805,36 @@ function drawHandResults(results) {
     for (const landmarks of results.multiHandLandmarks) {
       drawConnectors(handCanvasCtx, landmarks, HAND_CONNECTIONS, {
         color: "rgba(124, 245, 192, 0.85)",
-        lineWidth: 4
+        lineWidth: 2
       });
       drawLandmarks(handCanvasCtx, landmarks, {
         color: "rgba(255, 188, 125, 0.95)",
         fillColor: "rgba(8, 17, 31, 0.92)",
-        lineWidth: 2,
-        radius: 5
+        lineWidth: 1,
+        radius: 3
       });
+
+      const xs = landmarks.map((point) => point.x);
+      const ys = landmarks.map((point) => point.y);
+      const widthNorm = Math.max(...xs) - Math.min(...xs);
+      const heightNorm = Math.max(...ys) - Math.min(...ys);
+      const handSize = Math.max(widthNorm, heightNorm);
+      const handSizePercent = Math.max(0, handSize * 100);
+      handSizePercentEl.textContent = `Hand size: ${handSizePercent.toFixed(1)}%`;
+
+      if (handSize < MIN_HAND_SIZE_THRESHOLD) {
+        pendingDigit = null;
+        pendingFrames = 0;
+        pendingSince = 0;
+        ribbonPendingMatchSince = 0;
+        ribbonPendingLastMatchedAt = 0;
+        ribbonTriggeredCurrentHold = false;
+        trackingStateEl.textContent = "Hand too far";
+        gestureHintEl.textContent = "Move your hand closer";
+        continue;
+      }
+
+      trackingStateEl.textContent = "Hand tracked";
 
       lastLandmarkTime = performance.now();
       latestGestureVector = buildGestureVector(landmarks);
@@ -1817,20 +1853,31 @@ function drawHandResults(results) {
               ribbonTriggeredCurrentHold = false;
             }
 
-            if (!ribbonTriggeredCurrentHold && now - ribbonPendingMatchSince >= ribbonConfig.holdSeconds * 1000) {
+            ribbonPendingLastMatchedAt = now;
+          }
+
+          if (ribbonPendingMatchSince) {
+            const matchWindowMs = ribbonConfig.matchWindowSeconds * 1000;
+            const holdMs = ribbonConfig.holdSeconds * 1000;
+            const isWithinWindow = now - ribbonPendingLastMatchedAt <= matchWindowMs;
+
+            if (!isWithinWindow) {
+              ribbonPendingMatchSince = 0;
+              ribbonPendingLastMatchedAt = 0;
+              ribbonTriggeredCurrentHold = false;
+            } else if (!ribbonTriggeredCurrentHold && now - ribbonPendingMatchSince >= holdMs) {
               triggerConfiguredSpecialEffect(now);
             }
-          } else {
-            ribbonPendingMatchSince = 0;
-            ribbonTriggeredCurrentHold = false;
           }
         }
       }
       
     }
   } else {
+    handSizePercentEl.textContent = "Hand size: --";
     latestGestureVector = null;
     ribbonPendingMatchSince = 0;
+    ribbonPendingLastMatchedAt = 0;
     ribbonTriggeredCurrentHold = false;
     resetGestureStatus();
   }
@@ -1847,8 +1894,8 @@ const hands = new Hands({
 hands.setOptions({
   maxNumHands: 1,
   modelComplexity: 1,
-  minDetectionConfidence: 0.7,
-  minTrackingConfidence: 0.65,
+  minDetectionConfidence: 0.75,
+  minTrackingConfidence: 0.75,
   selfieMode: true
 });
 
