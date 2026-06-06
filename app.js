@@ -14,6 +14,9 @@ const gestureValueEl = document.querySelector("#gestureValue");
 const gestureHintEl = document.querySelector("#gestureHint");
 const ribbonStatusEl = document.querySelector("#ribbonStatus");
 const trackingStateEl = document.querySelector("#trackingState");
+const fullscreenTrackingStateEl = document.querySelector("#fullscreenTrackingState");
+const cameraSelectEl = document.querySelector("#cameraSelect");
+const CAMERA_DEVICE_ID_KEY = "gestureParticles.cameraDeviceId.v1";
 const trainerHintEl = document.querySelector("#trainerHint");
 const gestureTrainerGridEl = document.querySelector("#gestureTrainerGrid");
 const trainerPanelBodyEl = document.querySelector("#trainerPanelBody");
@@ -26,6 +29,8 @@ const ribbonHintEl = document.querySelector("#ribbonHint");
 const ribbonGestureCountEl = document.querySelector("#ribbonGestureCount");
 const saveRibbonGestureButton = document.querySelector("#saveRibbonGesture");
 const clearRibbonGestureButton = document.querySelector("#clearRibbonGesture");
+const triggerRibbonEffectButton = document.querySelector("#triggerRibbonEffectButton");
+const triggerFireworksEffectButton = document.querySelector("#triggerFireworksEffectButton");
 const specialEffectTypeEl = document.querySelector("#specialEffectType");
 const specialEffectHoldSecondsEl = document.querySelector("#specialEffectHoldSeconds");
 const specialEffectMatchWindowSecondsEl = document.querySelector("#specialEffectMatchWindowSeconds");
@@ -50,7 +55,7 @@ const SPECIAL_DIGIT_EFFECTS = {
   3: { kind: "word", label: "Mission", scale: 5.8 },
   2: { kind: "word", label: "First", scale: 5.6 },
   1: { kind: "word", label: "Delivery", scale: 5.4 },
-  0: { kind: "fireworks", label: "", scale: 4.8 }
+  0: { kind: "word", label: "Cheers", scale: 4.8 }
 };
 
 const CUSTOM_DIGIT_FOLDER = "./assets/custom-png";
@@ -119,6 +124,13 @@ function updateRibbonStatus(text, isActive = false) {
   ribbonStatusEl.classList.toggle("is-active", isActive);
 }
 
+function setTrackingState(text) {
+  trackingStateEl.textContent = text;
+  if (fullscreenTrackingStateEl) {
+    fullscreenTrackingStateEl.textContent = text;
+  }
+}
+
 function queueRibbonStatusReset(delayMs = 1400) {
   if (ribbonStatusResetTimer) {
     window.clearTimeout(ribbonStatusResetTimer);
@@ -180,7 +192,7 @@ function stopCamera(options = {}) {
   cameraState = "stopped";
   handSizePercentEl.textContent = "Hand size: --";
   updateRibbonStatus("Idle", false);
-  trackingStateEl.textContent = "Capture stopped";
+  setTrackingState("Capture stopped");
   if (!preserveHint) {
     gestureHintEl.textContent = "Capture stopped. Start the camera to continue gesture tracking.";
   }
@@ -311,6 +323,38 @@ function persistRibbonConfig() {
   window.localStorage.setItem(RIBBON_CONFIG_STORAGE_KEY, JSON.stringify(ribbonConfig));
 }
 
+async function populateCameraList() {
+  if (!navigator.mediaDevices || !cameraSelectEl) return;
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cameras = devices.filter((d) => d.kind === "videoinput");
+
+    // Clear and repopulate
+    cameraSelectEl.innerHTML = "";
+    cameras.forEach((cam, i) => {
+      const option = document.createElement("option");
+      option.value = cam.deviceId;
+      option.textContent = cam.label || `Camera ${i + 1}`;
+      cameraSelectEl.append(option);
+    });
+
+    const saved = window.localStorage.getItem(CAMERA_DEVICE_ID_KEY);
+    if (saved && Array.from(cameraSelectEl.options).some((o) => o.value === saved)) {
+      cameraSelectEl.value = saved;
+    } else if (cameraSelectEl.options.length) {
+      cameraSelectEl.selectedIndex = 0;
+    }
+
+    cameraSelectEl.style.display = "inline-block";
+  } catch {
+    // ignore
+  }
+}
+
+function getSelectedCameraDeviceId() {
+  return (cameraSelectEl && cameraSelectEl.value) || window.localStorage.getItem(CAMERA_DEVICE_ID_KEY) || null;
+}
+
 function updateRibbonTrainerUi() {
   ribbonGestureCountEl.textContent = ribbonGestureLibrary.length === 1 ? "1 sample" : `${ribbonGestureLibrary.length} samples`;
 
@@ -411,6 +455,32 @@ function triggerConfiguredSpecialEffect(eventTime) {
     sceneController.triggerFireworkCelebration();
   } else {
     ribbonHintEl.textContent = "Special-effect gesture matched. Triggered ribbon cutting.";
+    updateRibbonStatus("Ribbon Cutting", true);
+    sceneController.triggerRibbonCutEffect();
+  }
+
+  queueRibbonStatusReset();
+}
+
+function triggerSpecialEffectShortcut(effectType) {
+  ribbonPendingMatchSince = 0;
+  ribbonPendingLastMatchedAt = 0;
+  ribbonTriggeredCurrentHold = false;
+  ribbonEffectProtectionUntil = 0;
+  pendingDigit = null;
+  pendingFrames = 0;
+  pendingSince = 0;
+  currentDigit = null;
+  gestureValueEl.textContent = "--";
+  gestureHintEl.textContent = "Special effect triggered.";
+  sceneController.activateSpecialEffectOnly(0);
+
+  if (effectType === "fireworks") {
+    ribbonHintEl.textContent = "Shortcut triggered fireworks.";
+    updateRibbonStatus("Fireworks", true);
+    sceneController.triggerFireworkCelebration();
+  } else {
+    ribbonHintEl.textContent = "Shortcut triggered ribbon cutting.";
     updateRibbonStatus("Ribbon Cutting", true);
     sceneController.triggerRibbonCutEffect();
   }
@@ -815,6 +885,20 @@ function initializeGestureTrainer() {
   resetCustomGesturesButton.addEventListener("click", resetAllGestureTemplates);
   saveRibbonGestureButton.addEventListener("click", saveRibbonGesture);
   clearRibbonGestureButton.addEventListener("click", clearRibbonGestures);
+  triggerRibbonEffectButton.addEventListener("click", () => triggerSpecialEffectShortcut("ribbon"));
+  triggerFireworksEffectButton.addEventListener("click", () => triggerSpecialEffectShortcut("fireworks"));
+  if (cameraSelectEl) {
+    cameraSelectEl.addEventListener("change", () => {
+      try {
+        window.localStorage.setItem(CAMERA_DEVICE_ID_KEY, cameraSelectEl.value);
+      } catch {
+        // ignore
+      }
+      if (cameraState === "live") {
+        startCamera();
+      }
+    });
+  }
   specialEffectTypeEl.addEventListener("change", updateRibbonConfigFromInputs);
   specialEffectHoldSecondsEl.addEventListener("change", updateRibbonConfigFromInputs);
   specialEffectMatchWindowSecondsEl.addEventListener("change", updateRibbonConfigFromInputs);
@@ -1064,7 +1148,7 @@ function updateGesture(digit) {
   playGestureChangeSound(digit);
   gestureValueEl.textContent = String(digit);
   gestureHintEl.textContent = "Digit locked. Hold steady to keep the countdown shape stable.";
-  trackingStateEl.textContent = "Hand tracked";
+  setTrackingState("Hand tracked");
   const textureEntry = ensureDigitTexture(digit);
   sceneController.setDigitTexture(digit, textureEntry.texture, textureEntry.imageUrl);
 }
@@ -1087,7 +1171,7 @@ function resetGestureStatus() {
   ribbonTriggeredCurrentHold = false;
   ribbonEffectProtectionUntil = 0;
   updateRibbonStatus("Idle", false);
-  trackingStateEl.textContent = "Searching for hand";
+  setTrackingState("Searching for hand");
   if (currentDigit === null) {
     gestureHintEl.textContent = "Show one hand inside the camera frame with a number gesture from 0 to 9.";
   }
@@ -1190,7 +1274,30 @@ function toggleFloatingCameraVisibility() {
   updateFloatingCameraVisibility();
 }
 
+function isKeyboardInputTarget(target) {
+  return target instanceof HTMLElement && (
+    target.isContentEditable ||
+    ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)
+  );
+}
+
 function handlePresentationHotkeys(event) {
+  if (!isKeyboardInputTarget(event.target) && event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+    const key = event.key.toLowerCase();
+
+    if (key === "j") {
+      event.preventDefault();
+      triggerSpecialEffectShortcut("ribbon");
+      return;
+    }
+
+    if (key === "y") {
+      event.preventDefault();
+      triggerSpecialEffectShortcut("fireworks");
+      return;
+    }
+  }
+
   if (document.fullscreenElement !== sceneCardEl) {
     return;
   }
@@ -1829,26 +1936,27 @@ function drawHandResults(results) {
         ribbonPendingMatchSince = 0;
         ribbonPendingLastMatchedAt = 0;
         ribbonTriggeredCurrentHold = false;
-        trackingStateEl.textContent = "Hand too far";
-        gestureHintEl.textContent = "Move your hand closer";
+        setTrackingState("Hand too far. Move your hand closer");
         continue;
       }
 
-      trackingStateEl.textContent = "Hand tracked";
+      setTrackingState("Hand tracked");
 
       lastLandmarkTime = performance.now();
       latestGestureVector = buildGestureVector(landmarks);
 
       const digit = classifyRecognizedDigit(landmarks, latestGestureVector);
       if (digit !== null) {
+        setTrackingState("Digit recognized: " + digit);
         updateGesture(digit);
       } else {
-        const now = performance.now();
+        const now = performance.now();        
 
         if (now >= ribbonEffectProtectionUntil) {
           const ribbonMatched = isRibbonGestureMatched(latestGestureVector);
           if (ribbonMatched) {
             if (!ribbonPendingMatchSince) {
+              setTrackingState("Ribbon gesture detected. Hold to trigger effect.");
               ribbonPendingMatchSince = now;
               ribbonTriggeredCurrentHold = false;
             }
@@ -1866,6 +1974,7 @@ function drawHandResults(results) {
               ribbonPendingLastMatchedAt = 0;
               ribbonTriggeredCurrentHold = false;
             } else if (!ribbonTriggeredCurrentHold && now - ribbonPendingMatchSince >= holdMs) {
+              setTrackingState("Ribbon gesture held! Effect triggered.");
               triggerConfiguredSpecialEffect(now);
             }
           }
@@ -1879,6 +1988,7 @@ function drawHandResults(results) {
     ribbonPendingMatchSince = 0;
     ribbonPendingLastMatchedAt = 0;
     ribbonTriggeredCurrentHold = false;
+    setTrackingState("No hand detected");
     resetGestureStatus();
   }
 
@@ -1916,21 +2026,19 @@ videoElement.playsInline = true;
 async function startCamera() {
   stopCamera({ preserveHint: true });
   cameraState = "requesting";
-  trackingStateEl.textContent = "Requesting camera";
+  setTrackingState("Requesting camera");
   updateCaptureButton();
   try {
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error("MediaDevices API unavailable in this browser context.");
     }
 
-    activeStream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: "user",
-        width: { ideal: 960 },
-        height: { ideal: 720 }
-      },
-      audio: false
-    });
+    const selectedDeviceId = getSelectedCameraDeviceId();
+    const videoConstraints = selectedDeviceId
+      ? { deviceId: { exact: selectedDeviceId }, width: { ideal: 960 }, height: { ideal: 720 } }
+      : { facingMode: "user", width: { ideal: 960 }, height: { ideal: 720 } };
+
+    activeStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
 
     videoElement.srcObject = activeStream;
     await videoElement.play();
@@ -1946,7 +2054,7 @@ async function startCamera() {
       try {
         await hands.send({ image: videoElement });
       } catch {
-        trackingStateEl.textContent = "Tracking paused";
+        setTrackingState("Tracking paused");
       } finally {
         isProcessingFrame = false;
       }
@@ -1954,13 +2062,21 @@ async function startCamera() {
 
     processFrame();
     cameraState = "live";
-    trackingStateEl.textContent = "Camera live";
+    setTrackingState("Camera live");
     gestureHintEl.textContent = "Show one hand with a clear number gesture from 0 to 9.";
     updateCaptureButton();
+
+    // Refresh available camera list (labels may appear after permission granted)
+    populateCameraList();
+    try {
+      navigator.mediaDevices.addEventListener("devicechange", populateCameraList);
+    } catch {
+      // ignore if not supported
+    }
   } catch (error) {
     stopCamera({ preserveHint: true });
     cameraState = "unavailable";
-    trackingStateEl.textContent = "Camera unavailable";
+    setTrackingState("Camera unavailable");
     if (error?.name === "NotAllowedError") {
       gestureHintEl.textContent = "Camera permission was denied. Allow camera access in the browser and reload the page.";
     } else if (error?.name === "NotReadableError" || error?.name === "AbortError") {
@@ -1977,6 +2093,7 @@ async function startCamera() {
 
 toggleCaptureButton.addEventListener("click", toggleCapture);
 updateCaptureButton();
+populateCameraList();
 startCamera();
 
 window.setInterval(resetGestureStatus, 250);
