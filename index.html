@@ -107,11 +107,13 @@
         <div class="camera-header">
           <span>MediaPipe camera</span>
           <div class="camera-header-actions">
-            <span id="trackingState">Waiting for camera</span>
             <select id="cameraSelect" class="camera-select" aria-label="Select camera"></select>
-            <span id="handSizePercent" class="camera-size-pill">Hand size: --</span>
             <button id="toggleCaptureButton" class="ghost-button camera-toggle-button" type="button">Stop capture</button>
           </div>
+        </div>
+        <div class="camera-status-row">
+          <span id="trackingState">Waiting for camera</span>
+          <span id="handSizePercent" class="camera-size-pill">Hand size: --</span>
         </div>
         <div class="camera-stack">
           <video class="input-video" playsinline muted></video>
