@@ -423,12 +423,35 @@ function getRibbonGestureMatchScore(gestureVector, samples) {
   return best;
 }
 
-function isRibbonGestureMatched(gestureVector) {
-  if (!gestureVector || !ribbonGestureLibrary.length) {
+function getRibbonGestureMatchCount(gestureVectors) {
+  if (!Array.isArray(gestureVectors) || !gestureVectors.length || !ribbonGestureLibrary.length) {
+    return 0;
+  }
+
+  return gestureVectors.reduce((count, vector) => {
+    if (!vector || !Array.isArray(vector) || vector.length !== 63) {
+      return count;
+    }
+    return count + (getRibbonGestureMatchScore(vector, ribbonGestureLibrary) <= SPECIAL_EFFECT_MATCH_THRESHOLD ? 1 : 0);
+  }, 0);
+}
+
+function isRibbonGestureMatched(gestureVectorOrVectors) {
+  if (Array.isArray(gestureVectorOrVectors) && Array.isArray(gestureVectorOrVectors[0])) {
+    const validVectors = gestureVectorOrVectors.filter((vector) => Array.isArray(vector) && vector.length === 63);
+    if (!validVectors.length) {
+      return false;
+    }
+
+    const matchCount = getRibbonGestureMatchCount(validVectors);
+    return matchCount > Math.floor(validVectors.length / 2);
+  }
+
+  if (!gestureVectorOrVectors || !ribbonGestureLibrary.length) {
     return false;
   }
 
-  return getRibbonGestureMatchScore(gestureVector, ribbonGestureLibrary) <= SPECIAL_EFFECT_MATCH_THRESHOLD;
+  return getRibbonGestureMatchScore(gestureVectorOrVectors, ribbonGestureLibrary) <= SPECIAL_EFFECT_MATCH_THRESHOLD;
 }
 
 function triggerConfiguredSpecialEffect(eventTime) {
@@ -758,7 +781,38 @@ function classifyCustomDigit(gestureVector) {
   return null;
 }
 
+function countRecognizedDigits(gestureVectors) {
+  const counts = new Map();
+  for (const vector of gestureVectors) {
+    if (!vector || !Array.isArray(vector) || vector.length !== 63) {
+      continue;
+    }
+    const digit = classifyCustomDigit(vector);
+    if (digit !== null) {
+      counts.set(digit, (counts.get(digit) || 0) + 1);
+    }
+  }
+  return counts;
+}
+
 function classifyRecognizedDigit(landmarks, gestureVector) {
+  if (Array.isArray(landmarks) && landmarks.length && Array.isArray(landmarks[0]) && landmarks[0].length === 63 && gestureVector === undefined) {
+    const totalHands = landmarks.length;
+    const counts = countRecognizedDigits(landmarks);
+    const majorityThreshold = Math.floor(totalHands / 2) + 1;
+    let bestDigit = null;
+    let bestCount = 0;
+
+    for (const [digit, count] of counts.entries()) {
+      if (count > bestCount) {
+        bestCount = count;
+        bestDigit = digit;
+      }
+    }
+
+    return bestCount >= majorityThreshold ? bestDigit : null;
+  }
+
   const customDigit = classifyCustomDigit(gestureVector);
   if (customDigit !== null) {
     return customDigit;
@@ -1909,6 +1963,11 @@ function drawHandResults(results) {
   handCanvasCtx.drawImage(results.image, 0, 0, width, height);
 
   if (results.multiHandLandmarks?.length) {
+    const validGestureVectors = [];
+    let maxHandSizePercent = 0;
+    let validHands = 0;
+    let tooFarHands = 0;
+
     for (const landmarks of results.multiHandLandmarks) {
       drawConnectors(handCanvasCtx, landmarks, HAND_CONNECTIONS, {
         color: "rgba(124, 245, 192, 0.85)",
@@ -1927,36 +1986,53 @@ function drawHandResults(results) {
       const heightNorm = Math.max(...ys) - Math.min(...ys);
       const handSize = Math.max(widthNorm, heightNorm);
       const handSizePercent = Math.max(0, handSize * 100);
-      handSizePercentEl.textContent = `Hand size: ${handSizePercent.toFixed(1)}%`;
+      maxHandSizePercent = Math.max(maxHandSizePercent, handSizePercent);
 
       if (handSize < MIN_HAND_SIZE_THRESHOLD) {
-        pendingDigit = null;
-        pendingFrames = 0;
-        pendingSince = 0;
-        ribbonPendingMatchSince = 0;
-        ribbonPendingLastMatchedAt = 0;
-        ribbonTriggeredCurrentHold = false;
-        setTrackingState("Hand too far. Move your hand closer");
+        tooFarHands += 1;
         continue;
       }
 
-      setTrackingState("Hand tracked");
+      validHands += 1;
+      validGestureVectors.push(buildGestureVector(landmarks));
+    }
 
+    if (!validHands) {
+      handSizePercentEl.textContent = "Hand size: --";
+      latestGestureVector = null;
+      pendingDigit = null;
+      pendingFrames = 0;
+      pendingSince = 0;
+      ribbonPendingMatchSince = 0;
+      ribbonPendingLastMatchedAt = 0;
+      ribbonTriggeredCurrentHold = false;
+      setTrackingState(tooFarHands > 1 ? "Hands too far. Move your hands closer" : "Hand too far. Move your hand closer");
+      resetGestureStatus();
+    } else {
+      handSizePercentEl.textContent = `Hand size: ${maxHandSizePercent.toFixed(1)}%`;
       lastLandmarkTime = performance.now();
-      latestGestureVector = buildGestureVector(landmarks);
+      latestGestureVector = validGestureVectors[0];
+      const now = performance.now();
 
-      const digit = classifyRecognizedDigit(landmarks, latestGestureVector);
+      if (validHands > 1) {
+        setTrackingState(`${validHands} hands tracked`);
+      } else {
+        setTrackingState("Hand tracked");
+      }
+
+      const digit = classifyRecognizedDigit(validGestureVectors);
       if (digit !== null) {
-        setTrackingState("Digit recognized: " + digit);
+        const digitCounts = countRecognizedDigits(validGestureVectors);
+        const recognizedCount = digitCounts.get(digit) || 0;
+        setTrackingState(`Digit recognized: ${digit} (${recognizedCount}/${validHands} hands)`);
         updateGesture(digit);
       } else {
-        const now = performance.now();        
-
         if (now >= ribbonEffectProtectionUntil) {
-          const ribbonMatched = isRibbonGestureMatched(latestGestureVector);
-          if (ribbonMatched) {
+          const ribbonMatchCount = getRibbonGestureMatchCount(validGestureVectors);
+          const ribbonMajority = ribbonMatchCount > Math.floor(validHands / 2);
+          if (ribbonMajority) {
             if (!ribbonPendingMatchSince) {
-              setTrackingState("Ribbon gesture detected. Hold to trigger effect.");
+              setTrackingState(`Ribbon gesture detected on ${ribbonMatchCount}/${validHands} hands. Hold to trigger effect.`);
               ribbonPendingMatchSince = now;
               ribbonTriggeredCurrentHold = false;
             }
@@ -1980,11 +2056,13 @@ function drawHandResults(results) {
           }
         }
       }
-      
     }
   } else {
     handSizePercentEl.textContent = "Hand size: --";
     latestGestureVector = null;
+    pendingDigit = null;
+    pendingFrames = 0;
+    pendingSince = 0;
     ribbonPendingMatchSince = 0;
     ribbonPendingLastMatchedAt = 0;
     ribbonTriggeredCurrentHold = false;
@@ -2002,7 +2080,7 @@ const hands = new Hands({
 });
 
 hands.setOptions({
-  maxNumHands: 1,
+  maxNumHands: 4,
   modelComplexity: 1,
   minDetectionConfidence: 0.75,
   minTrackingConfidence: 0.75,
