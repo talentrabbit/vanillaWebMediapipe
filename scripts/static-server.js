@@ -17,6 +17,7 @@ function readArg(name, fallback) {
 const rootArg = readArg("--root", process.cwd());
 const root = path.resolve(rootArg);
 const port = Number.parseInt(readArg("--port", "8080"), 10);
+const bindAddress = readArg("--bind", "0.0.0.0");
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -36,7 +37,10 @@ const mimeTypes = {
 function sendResponse(res, statusCode, body, contentType = "text/plain; charset=utf-8") {
   res.writeHead(statusCode, {
     "Cache-Control": "no-store",
-    "Content-Type": contentType
+    "Content-Type": contentType,
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type"
   });
   res.end(body);
 }
@@ -52,6 +56,11 @@ function getSafePath(urlPath) {
 }
 
 const server = http.createServer((req, res) => {
+  if (req.method === "OPTIONS") {
+    sendResponse(res, 204, null, "text/plain; charset=utf-8");
+    return;
+  }
+
   const requestedPath = req.url === "/" ? "/index.html" : req.url;
   const safePath = getSafePath(requestedPath || "/index.html");
 
@@ -83,9 +92,9 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(port, "127.0.0.1", () => {
+server.listen(port, bindAddress, () => {
   // Keep output concise for start script UX.
-  console.log(`Gesture Particles server running at http://127.0.0.1:${port}`);
+  console.log(`Gesture Particles server running at http://${bindAddress}:${port}`);
 });
 
 function shutdown() {

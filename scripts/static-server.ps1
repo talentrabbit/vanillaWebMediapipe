@@ -4,7 +4,7 @@ param(
 
   [int]$Port = 8080,
 
-  [string]$BindAddress = "127.0.0.1"
+  [string]$BindAddress = "0.0.0.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -63,6 +63,9 @@ function Send-Response {
     "Content-Type: $ContentType"
     "Content-Length: $($Body.Length)"
     "Cache-Control: no-store"
+    "Access-Control-Allow-Origin: *"
+    "Access-Control-Allow-Methods: GET, HEAD, OPTIONS"
+    "Access-Control-Allow-Headers: Content-Type"
     "Connection: close"
     ""
     ""
@@ -138,6 +141,11 @@ try {
 
       $method = $requestParts[0].ToUpperInvariant()
       $requestPath = $requestParts[1]
+      if ($method -eq "OPTIONS") {
+        Send-Response -Stream $stream -StatusCode 204 -ReasonPhrase "No Content" -Body @()
+        continue
+      }
+
       if ($method -ne "GET" -and $method -ne "HEAD") {
         $body = [System.Text.Encoding]::UTF8.GetBytes("Method Not Allowed")
         Send-Response -Stream $stream -StatusCode 405 -ReasonPhrase "Method Not Allowed" -Body $body

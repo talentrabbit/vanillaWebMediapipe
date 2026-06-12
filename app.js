@@ -65,8 +65,14 @@ const RIBBON_CONFIG_STORAGE_KEY = "gestureParticles.ribbonConfig.v1";
 const DIGIT_CONFIG_STORAGE_KEY = "gestureParticles.digitConfig.v1";
 const PRELOADED_GESTURES_URL = "./assets/gesture-samples.json";
 const GESTURE_CHANGE_SOUND_URL = "./assets/audio/gesture-change.wav";
+const FIREWORKS_SOUND_URL = "./assets/audio/fireworks.wav";
+const RIBBON_CUT_SOUND_URL = "./assets/audio/ribboncut.wav";
 const SPECIAL_EFFECT_MATCH_THRESHOLD = 0.2;
-const MIN_HAND_SIZE_THRESHOLD = 0.10;
+const MIN_HAND_SIZE_THRESHOLD = 0.15;
+
+if (typeof window !== "undefined") {
+  window.SOUND_ENABLED = false;
+}
 const DEFAULT_RIBBON_CONFIG = {
   effectType: "ribbon",
   holdSeconds: 2,
@@ -74,7 +80,7 @@ const DEFAULT_RIBBON_CONFIG = {
   protectionSeconds: 1.5
 };
 const DEFAULT_DIGIT_CONFIG = {
-  holdSeconds: 0.15
+  holdSeconds: 0.10
 };
 const textureLoader = new THREE.TextureLoader();
 const digitTextures = new Map();
@@ -106,17 +112,95 @@ let isFloatingCameraVisible = true;
 let floatingCameraOffset = { x: 0, y: 0 };
 let floatingCameraPosition = { x: 24, y: 24 };
 const gestureChangeSound = new Audio(GESTURE_CHANGE_SOUND_URL);
+const fireworksSound = new Audio(FIREWORKS_SOUND_URL);
+const ribbonCutSound = new Audio(RIBBON_CUT_SOUND_URL);
+
 gestureChangeSound.preload = "auto";
+fireworksSound.preload = "auto";
+ribbonCutSound.preload = "auto";
+
 gestureChangeSound.volume = 0.72;
+fireworksSound.volume = 0.85;
+ribbonCutSound.volume = 0.85;
+
+// Prefer Web Audio for short repeated digit sounds (more reliable than cloning DOM Audio nodes)
+let audioCtx = null;
+let gestureChangeBuffer = null;
+
+async function initGestureAudioBuffer() {
+  if (gestureChangeBuffer || !window.fetch) return;
+  try {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    const resp = await fetch(GESTURE_CHANGE_SOUND_URL, { cache: 'force-cache' });
+    const arrayBuffer = await resp.arrayBuffer();
+    gestureChangeBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+  } catch (e) {
+    // leave gestureChangeBuffer null to use fallback
+    gestureChangeBuffer = null;
+  }
+}
 
 function primeGestureChangeSound() {
+  // warm up both DOM audio and WebAudio buffer
   gestureChangeSound.load();
+  fireworksSound.load();
+  ribbonCutSound.load();
+  initGestureAudioBuffer().catch(() => {});
 }
 
 function playGestureChangeSound(digit) {
-  const sound = gestureChangeSound.cloneNode();
-  sound.volume = 0.6 + digit * 0.018;
-  sound.play().catch(() => {});
+  if (typeof window !== "undefined" && !window.SOUND_ENABLED) {
+    return;
+  }
+
+  if (digit == 0) {
+    playSpecialEffectSound(ribbonConfig.effectType);
+    return;
+  }
+
+  // Use Web AudioBuffer if available
+  if (gestureChangeBuffer && audioCtx) {
+    try {
+      const src = audioCtx.createBufferSource();
+      src.buffer = gestureChangeBuffer;
+      const gain = audioCtx.createGain();
+      gain.gain.value = Math.max(0, Math.min(1, 0.6 + digit * 0.018));
+      src.connect(gain).connect(audioCtx.destination);
+      src.start();
+      src.onended = () => {
+        try { src.disconnect(); gain.disconnect(); } catch (e) {}
+      };
+      return;
+    } catch (e) {
+      // fall through to DOM audio fallback
+    }
+  }
+
+  // Fallback: reuse the preloaded Audio element instead of cloning.
+  try {
+    gestureChangeSound.currentTime = 0;
+    gestureChangeSound.volume = Math.max(0, Math.min(1, 0.6 + digit * 0.018));
+    gestureChangeSound.play().catch(() => {});
+  } catch (e) {
+    // Ignore playback failure
+  }
+}
+
+function playSpecialEffectSound(effectType) {
+  if (typeof window !== "undefined" && !window.SOUND_ENABLED) {
+    return;
+  }
+
+  const source = effectType === "fireworks" ? fireworksSound : ribbonCutSound;
+  try {
+    source.currentTime = 0;
+    source.volume = 0.9;
+    source.play().catch(() => {});
+  } catch (e) {
+    // Ignore playback failure
+  }
 }
 
 function updateRibbonStatus(text, isActive = false) {
@@ -472,7 +556,8 @@ function triggerConfiguredSpecialEffect(eventTime) {
   gestureHintEl.textContent = "Special effect active.";
   sceneController.activateSpecialEffectOnly(ribbonConfig.protectionSeconds);
 
-  if (ribbonConfig.effectType === "fireworks") {
+  const effectType = ribbonConfig.effectType;
+  if (effectType === "fireworks") {
     ribbonHintEl.textContent = "Special-effect gesture matched. Triggered fireworks.";
     updateRibbonStatus("Fireworks", true);
     sceneController.triggerFireworkCelebration();
@@ -482,6 +567,7 @@ function triggerConfiguredSpecialEffect(eventTime) {
     sceneController.triggerRibbonCutEffect();
   }
 
+  playSpecialEffectSound(effectType);
   queueRibbonStatusReset();
 }
 
@@ -508,7 +594,29 @@ function triggerSpecialEffectShortcut(effectType) {
     sceneController.triggerRibbonCutEffect();
   }
 
+  playSpecialEffectSound(effectType);
   queueRibbonStatusReset();
+}
+
+function triggerDigitShortcut(digit) {
+  if (typeof digit !== "number" || digit < 0 || digit > 9) {
+    return;
+  }
+
+  ribbonPendingMatchSince = 0;
+  ribbonPendingLastMatchedAt = 0;
+  ribbonTriggeredCurrentHold = false;
+  ribbonEffectProtectionUntil = 0;
+  pendingDigit = null;
+  pendingFrames = 0;
+  pendingSince = 0;
+  currentDigit = digit;
+  playGestureChangeSound(digit);
+  gestureValueEl.textContent = String(digit);
+  gestureHintEl.textContent = `Digit ${digit} shortcut triggered.`;
+  setTrackingState(`Digit shortcut: ${digit}`);
+  const textureEntry = ensureDigitTexture(digit);
+  sceneController.setDigitTexture(digit, textureEntry.texture, textureEntry.imageUrl);
 }
 
 function hasStoredGestureLibrary() {
@@ -1336,7 +1444,7 @@ function isKeyboardInputTarget(target) {
 }
 
 function handlePresentationHotkeys(event) {
-  if (!isKeyboardInputTarget(event.target) && event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+  if (!isKeyboardInputTarget(event.target) && event.ctrlKey && event.altKey && !event.metaKey && !event.shiftKey) {
     const key = event.key.toLowerCase();
 
     if (key === "j") {
@@ -1348,6 +1456,12 @@ function handlePresentationHotkeys(event) {
     if (key === "y") {
       event.preventDefault();
       triggerSpecialEffectShortcut("fireworks");
+      return;
+    }
+
+    if (key >= "0" && key <= "9") {
+      event.preventDefault();
+      triggerDigitShortcut(Number(key));
       return;
     }
   }
@@ -2080,7 +2194,7 @@ const hands = new Hands({
 });
 
 hands.setOptions({
-  maxNumHands: 4,
+  maxNumHands: 1,
   modelComplexity: 1,
   minDetectionConfidence: 0.75,
   minTrackingConfidence: 0.75,
