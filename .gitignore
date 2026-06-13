@@ -1,1 +1,7 @@
 .dev-server.pid
+server-debug-err.log
+server-debug-out.log
+scripts/check-start-policy.ps1
+scripts/gesture-particles-dev-ca.pfx
+start-server-out.log
+start-server-err.log

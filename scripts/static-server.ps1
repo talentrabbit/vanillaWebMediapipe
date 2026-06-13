@@ -4,7 +4,9 @@ param(
 
   [int]$Port = 8080,
 
-  [string]$BindAddress = "0.0.0.0"
+  [string]$BindAddress = "0.0.0.0",
+
+  [switch]$Secure
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,7 +48,7 @@ function Get-ContentType {
 
 function Send-Response {
   param(
-    [System.Net.Sockets.NetworkStream]$Stream,
+    [System.IO.Stream]$Stream,
     [int]$StatusCode,
     [string]$ReasonPhrase,
     [byte[]]$Body,
@@ -105,19 +107,135 @@ function Get-SafeFilePath {
   return $null
 }
 
+$sslCert = $null
+if ($Secure) {
+  $hostName = [System.Net.Dns]::GetHostName()
+  $caFile = Join-Path $PSScriptRoot "gesture-particles-dev-ca.pfx"
+  $caSubject = "CN=Gesture Particles Local CA"
+  $rootCert = $null
+
+  if (Test-Path $caFile) {
+    $rootCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($caFile, "", [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)
+  }
+
+  if (-not $rootCert) {
+    $rootKey = [System.Security.Cryptography.RSA]::Create(4096)
+    $rootReq = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
+      $caSubject,
+      $rootKey,
+      [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+      [System.Security.Cryptography.RSASignaturePadding]::Pkcs1
+    )
+
+    $rootReq.CertificateExtensions.Add(
+      [System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($true, $true, 0, $true)
+    )
+    $rootReq.CertificateExtensions.Add(
+      [System.Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new(
+        ([System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyCertSign -bor [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::CrlSign),
+        $true
+      )
+    )
+    $rootReq.CertificateExtensions.Add(
+      [System.Security.Cryptography.X509Certificates.X509SubjectKeyIdentifierExtension]::new($rootReq.PublicKey, $false)
+    )
+
+    $rootCert = $rootReq.CreateSelfSigned([datetime]::UtcNow.AddDays(-1), [datetime]::UtcNow.AddYears(10))
+    $rootCert = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::CopyWithPrivateKey($rootCert, $rootKey)
+    $rootCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+      $rootCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, ""),
+      "",
+      [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable
+    )
+
+    [System.IO.File]::WriteAllBytes($caFile, $rootCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, ""))
+  }
+
+  $rootStore = New-Object System.Security.Cryptography.X509Certificates.X509Store([System.Security.Cryptography.X509Certificates.StoreName]::Root, [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+  $rootStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+  $existingRoot = $rootStore.Certificates | Where-Object { $_.Subject -eq $caSubject }
+  if (-not $existingRoot) {
+    $rootStore.Add([System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)))
+  }
+  $rootStore.Close()
+
+  $sanBuilder = New-Object System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder
+  $sanBuilder.AddDnsName("localhost")
+  $sanBuilder.AddDnsName($hostName)
+  $sanBuilder.AddIpAddress([System.Net.IPAddress]::Loopback)
+  $sanBuilder.AddIpAddress([System.Net.IPAddress]::IPv6Loopback)
+  foreach ($address in [System.Net.Dns]::GetHostAddresses($hostName) | Where-Object { $_.AddressFamily -eq 'InterNetwork' -or $_.AddressFamily -eq 'InterNetworkV6' }) {
+    $sanBuilder.AddIpAddress($address)
+  }
+
+  $key = [System.Security.Cryptography.RSA]::Create(2048)
+  $request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
+    "CN=$hostName",
+    $key,
+    [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+    [System.Security.Cryptography.RSASignaturePadding]::Pkcs1
+  )
+
+  $request.CertificateExtensions.Add(
+    [System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($false, $false, 0, $false)
+  )
+  $request.CertificateExtensions.Add(
+    [System.Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new(
+      ([System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature -bor [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyEncipherment),
+      $false
+    )
+  )
+  $request.CertificateExtensions.Add(
+    [System.Security.Cryptography.X509Certificates.X509SubjectKeyIdentifierExtension]::new($request.PublicKey, $false)
+  )
+  $request.CertificateExtensions.Add($sanBuilder.Build())
+
+  $sslCert = $request.Create($rootCert, [datetime]::UtcNow.AddDays(-1), [datetime]::UtcNow.AddYears(1), [byte[]]@(0x01,0x00,0x00,0x00))
+  $sslCert = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::CopyWithPrivateKey($sslCert, $key)
+  $sslCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+    $sslCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, ""),
+    "",
+    [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable
+  )
+}
+
 $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse($BindAddress), $Port)
 $listener.Start()
 
-Write-Output "Gesture Particles server running at http://${BindAddress}:$Port"
+$scheme = "http"
+if ($Secure.IsPresent) { $scheme = "https" }
+Write-Output "Gesture Particles server running at {$scheme}://${BindAddress}:$Port"
 
 try {
   while ($true) {
     $client = $listener.AcceptTcpClient()
-    $stream = $null
+    $netStream = $client.GetStream()
+    $stream = $netStream
+    $sslStream = $null
     $reader = $null
 
     try {
-      $stream = $client.GetStream()
+      if ($Secure) {
+        $sslStream = New-Object System.Net.Security.SslStream($netStream, $false)
+        $sslProtocols = [System.Security.Authentication.SslProtocols]::Tls12
+        if ([Enum]::IsDefined([System.Security.Authentication.SslProtocols], "Tls13")) {
+          $sslProtocols = $sslProtocols -bor [System.Security.Authentication.SslProtocols]::Tls13
+        }
+
+        try {
+          $sslStream.AuthenticateAsServer($sslCert, $false, $sslProtocols, $false)
+          $stream = $sslStream
+        } catch {
+          Write-Host "SSL auth failed: $($_.Exception.Message)"
+          if ($_.Exception.InnerException) {
+            Write-Host "  Inner: $($_.Exception.InnerException.Message)"
+          }
+          $sslStream.Dispose()
+          $client.Close()
+          continue
+        }
+      }
+
       $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::ASCII, $false, 1024, $true)
 
       $requestLine = $reader.ReadLine()
@@ -181,7 +299,9 @@ try {
         $reader.Dispose()
       }
 
-      if ($stream) {
+      if ($sslStream) {
+        $sslStream.Dispose()
+      } elseif ($stream) {
         $stream.Dispose()
       }
 
