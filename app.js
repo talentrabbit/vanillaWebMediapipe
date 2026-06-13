@@ -72,6 +72,41 @@ const MIN_HAND_SIZE_THRESHOLD = 0.15;
 
 if (typeof window !== "undefined") {
   window.SOUND_ENABLED = false;
+
+  window.maxNumHands = Number.isInteger(window.maxNumHands) ? window.maxNumHands : 1;
+  window.particleLevel = ["low", "medium", "high"].includes(String(window.particleLevel).toLowerCase()) ? String(window.particleLevel).toLowerCase() : "medium";
+  window.PARTICLE_LEVEL_COUNTS = {
+    low: 1100,
+    medium: 2200,
+    high: 4400
+  };
+
+  window.getParticleCount = function getParticleCount() {
+    return window.PARTICLE_LEVEL_COUNTS[window.particleLevel] || 2200;
+  };
+
+  window.setMaxNumHands = function setMaxNumHands(value) {
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 4) {
+      console.warn("setMaxNumHands expects an integer between 1 and 4.");
+      return;
+    }
+    window.maxNumHands = parsed;
+    if (typeof window.updateHandTrackingOptions === "function") {
+      window.updateHandTrackingOptions();
+    }
+    console.info("maxNumHands set to", parsed);
+  };
+
+  window.setParticleLevel = function setParticleLevel(level) {
+    const normalized = String(level).toLowerCase();
+    if (!Object.prototype.hasOwnProperty.call(window.PARTICLE_LEVEL_COUNTS, normalized)) {
+      console.warn("setParticleLevel expects one of: low, medium, high.");
+      return;
+    }
+    window.particleLevel = normalized;
+    console.info("particleLevel set to", normalized, "(", window.getParticleCount(), "particles)");
+  };
 }
 const DEFAULT_RIBBON_CONFIG = {
   effectType: "ribbon",
@@ -1514,7 +1549,8 @@ class ParticleSceneController {
     this.camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
     this.camera.position.set(0, 0, 14);
 
-    this.particleCount = 2200;
+    this.particleCount = typeof window !== "undefined" && typeof window.getParticleCount === "function" ? window.getParticleCount() : 2200;
+    this.particleLevel = typeof window !== "undefined" ? window.particleLevel : "medium";
     this.particlePositions = new Float32Array(this.particleCount * 3);
     this.particleVelocities = new Float32Array(this.particleCount * 3);
     this.particleTargets = new Float32Array(this.particleCount * 3);
@@ -2194,12 +2230,26 @@ const hands = new Hands({
 });
 
 hands.setOptions({
-  maxNumHands: 1,
+  maxNumHands: typeof window !== "undefined" && Number.isInteger(window.maxNumHands) ? window.maxNumHands : 1,
   modelComplexity: 1,
   minDetectionConfidence: 0.75,
   minTrackingConfidence: 0.75,
   selfieMode: true
 });
+
+if (typeof window !== "undefined") {
+  window.updateHandTrackingOptions = function updateHandTrackingOptions() {
+    if (hands && typeof hands.setOptions === "function") {
+      hands.setOptions({
+        maxNumHands: Number.isInteger(window.maxNumHands) ? window.maxNumHands : 1,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.75,
+        minTrackingConfidence: 0.75,
+        selfieMode: true
+      });
+    }
+  };
+}
 
 hands.onResults((results) => {
   if (handCanvas.width !== results.image.width || handCanvas.height !== results.image.height) {
