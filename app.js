@@ -16,6 +16,7 @@ const ribbonStatusEl = document.querySelector("#ribbonStatus");
 const trackingStateEl = document.querySelector("#trackingState");
 const fullscreenTrackingStateEl = document.querySelector("#fullscreenTrackingState");
 const cameraSelectEl = document.querySelector("#cameraSelect");
+const handRecognitionStateEl = document.querySelector("#handRecognitionState");
 const CAMERA_DEVICE_ID_KEY = "gestureParticles.cameraDeviceId.v1";
 const trainerHintEl = document.querySelector("#trainerHint");
 const gestureTrainerGridEl = document.querySelector("#gestureTrainerGrid");
@@ -55,7 +56,7 @@ const SPECIAL_DIGIT_EFFECTS = {
   3: { kind: "word", label: "Mission", scale: 5.8 },
   2: { kind: "word", label: "First", scale: 5.6 },
   1: { kind: "word", label: "Delivery", scale: 5.4 },
-  0: { kind: "word", label: "Cheers", scale: 4.8 }
+  0: { kind: "word", label: "Cheers", scale: 4.8, fireworks: true }
 };
 
 const CUSTOM_DIGIT_FOLDER = "./assets/custom-png";
@@ -69,9 +70,10 @@ const FIREWORKS_SOUND_URL = "./assets/audio/fireworks.wav";
 const RIBBON_CUT_SOUND_URL = "./assets/audio/ribboncut.wav";
 const SPECIAL_EFFECT_MATCH_THRESHOLD = 0.2;
 const MIN_HAND_SIZE_THRESHOLD = 0.15;
+const NO_DIGIT_CLEAR_DELAY_MS = 3000;
 
 if (typeof window !== "undefined") {
-  window.SOUND_ENABLED = false;
+  window.SOUND_ENABLED = typeof window.SOUND_ENABLED === "boolean" ? window.SOUND_ENABLED : false;
 
   window.maxNumHands = Number.isInteger(window.maxNumHands) ? window.maxNumHands : 1;
   window.particleLevel = ["low", "medium", "high"].includes(String(window.particleLevel).toLowerCase()) ? String(window.particleLevel).toLowerCase() : "medium";
@@ -105,7 +107,15 @@ if (typeof window !== "undefined") {
       return;
     }
     window.particleLevel = normalized;
+    if (typeof window.applyParticleLevelSetting === "function") {
+      window.applyParticleLevelSetting();
+    }
     console.info("particleLevel set to", normalized, "(", window.getParticleCount(), "particles)");
+  };
+
+  window.setSoundEnabled = function setSoundEnabled(value) {
+    window.SOUND_ENABLED = Boolean(value);
+    console.info("SOUND_ENABLED set to", window.SOUND_ENABLED);
   };
 }
 const DEFAULT_RIBBON_CONFIG = {
@@ -132,6 +142,8 @@ let animationFrameId = 0;
 let cameraState = "idle";
 let latestGestureVector = null;
 let isTrainerPanelCollapsed = false;
+let lastDigitRecognizedAt = performance.now();
+let sceneClearedForNoDigit = false;
 let customGestureLibrary = loadStoredGestureLibrary();
 let ribbonGestureLibrary = loadStoredRibbonGestureLibrary();
 let ribbonConfig = loadStoredRibbonConfig();
@@ -250,6 +262,26 @@ function setTrackingState(text) {
   }
 }
 
+function updateHandRecognitionState(labels = []) {
+  if (!handRecognitionStateEl) {
+    return;
+  }
+
+  if ((window.maxNumHands || 1) <= 1) {
+    handRecognitionStateEl.hidden = true;
+    handRecognitionStateEl.textContent = "";
+    return;
+  }
+
+  const states = [];
+  for (let index = 0; index < window.maxNumHands; index += 1) {
+    states.push(`Hand${index + 1}: ${labels[index] ?? "--"}`);
+  }
+
+  handRecognitionStateEl.hidden = false;
+  handRecognitionStateEl.textContent = states.join("  ");
+}
+
 function queueRibbonStatusReset(delayMs = 1400) {
   if (ribbonStatusResetTimer) {
     window.clearTimeout(ribbonStatusResetTimer);
@@ -308,6 +340,7 @@ function stopCamera(options = {}) {
   videoElement.pause();
   videoElement.srcObject = null;
   handCanvasCtx.clearRect(0, 0, handCanvas.width, handCanvas.height);
+  updateHandRecognitionState([]);
   cameraState = "stopped";
   handSizePercentEl.textContent = "Hand size: --";
   updateRibbonStatus("Idle", false);
@@ -1350,6 +1383,26 @@ function updateGesture(digit) {
   sceneController.setDigitTexture(digit, textureEntry.texture, textureEntry.imageUrl);
 }
 
+function clearDigitRecognitionStateForInactivity(now = performance.now()) {
+  if (now - lastDigitRecognizedAt < NO_DIGIT_CLEAR_DELAY_MS) {
+    return;
+  }
+
+  if (!sceneClearedForNoDigit) {
+    sceneClearedForNoDigit = true;
+    sceneController.clearSceneForNoDigit();
+  }
+
+  if (currentDigit !== null) {
+    currentDigit = null;
+    pendingDigit = null;
+    pendingFrames = 0;
+    pendingSince = 0;
+    gestureValueEl.textContent = "--";
+    gestureHintEl.textContent = "No stable digit recognized.";
+  }
+}
+
 function resetGestureStatus() {
   if (cameraState !== "live") {
     return;
@@ -1749,6 +1802,7 @@ class ParticleSceneController {
 
   async setDigitTexture(digit, texture, imageUrl) {
     this.digitPoints.visible = true;
+    this.bgPoints.visible = true;
     this.paletteA.set(DIGIT_COLORS[digit][0]);
     this.paletteB.set(DIGIT_COLORS[digit][1]);
     const currentToken = ++this.morphToken;
@@ -1776,13 +1830,74 @@ class ParticleSceneController {
     this.setSpecialEffect(digit);
   }
 
+  applyParticleLevel(level) {
+    const normalized = ["low", "medium", "high"].includes(String(level).toLowerCase())
+      ? String(level).toLowerCase()
+      : "medium";
+    const nextCount = typeof window !== "undefined" && window.PARTICLE_LEVEL_COUNTS
+      ? window.PARTICLE_LEVEL_COUNTS[normalized] || 2200
+      : 2200;
+
+    if (nextCount === this.particleCount && this.particleLevel === normalized) {
+      return;
+    }
+
+    this.particleCount = nextCount;
+    this.particleLevel = normalized;
+    this.particlePositions = new Float32Array(this.particleCount * 3);
+    this.particleVelocities = new Float32Array(this.particleCount * 3);
+    this.particleTargets = new Float32Array(this.particleCount * 3);
+    this.particleColors = new Float32Array(this.particleCount * 3);
+
+    for (let index = 0; index < this.particleCount; index += 1) {
+      const i3 = index * 3;
+      this.particlePositions[i3] = THREE.MathUtils.randFloatSpread(12);
+      this.particlePositions[i3 + 1] = THREE.MathUtils.randFloatSpread(12);
+      this.particlePositions[i3 + 2] = THREE.MathUtils.randFloatSpread(3);
+      this.particleTargets[i3] = this.particlePositions[i3];
+      this.particleTargets[i3 + 1] = this.particlePositions[i3 + 1];
+      this.particleTargets[i3 + 2] = this.particlePositions[i3 + 2];
+      this.particleColors[i3] = 1;
+      this.particleColors[i3 + 1] = 1;
+      this.particleColors[i3 + 2] = 1;
+    }
+
+    this.digitGeometry.setAttribute("position", new THREE.BufferAttribute(this.particlePositions, 3));
+    this.digitGeometry.setAttribute("color", new THREE.BufferAttribute(this.particleColors, 3));
+    this.digitGeometry.attributes.position.needsUpdate = true;
+    this.digitGeometry.attributes.color.needsUpdate = true;
+
+    const digitToRestore = Number.isInteger(currentDigit) ? currentDigit : 0;
+    const textureEntry = ensureDigitTexture(digitToRestore);
+    this.setDigitTexture(digitToRestore, textureEntry.texture, textureEntry.imageUrl);
+  }
+
+  clearSceneForNoDigit() {
+    this.digitPoints.visible = false;
+    this.bgPoints.visible = true;
+    this.effectSprite.visible = false;
+    this.effectSprite.material.opacity = 0;
+    this.effectSprite.material.map = null;
+    this.effectSprite.material.needsUpdate = true;
+    this.activeEffect = null;
+    this.activeEffectDigit = null;
+    this.ribbonEffectActive = false;
+    this.fireworksEnabled = false;
+    this.fireworkCelebrationUntil = 0;
+    this.fireworkPoints.visible = false;
+    this.fireworkMaterial.opacity = 0;
+    this.ribbonLeft.material.opacity = 0;
+    this.ribbonRight.material.opacity = 0;
+    this.scissorPivot.visible = false;
+  }
+
   setSpecialEffect(digit) {
     const hasDigitZeroSample = customGestureLibrary[String(0)]?.length > 0;
     const zeroEffectAllowed = digit !== 0 || hasDigitZeroSample;
     const effectConfig = zeroEffectAllowed ? SPECIAL_DIGIT_EFFECTS[digit] || null : null;
     this.activeEffectDigit = digit;
     this.activeEffect = effectConfig;
-    this.fireworksEnabled = effectConfig?.kind === "fireworks";
+    this.fireworksEnabled = effectConfig?.kind === "fireworks" || effectConfig?.fireworks === true;
     this.fireworkPoints.visible = this.fireworksEnabled;
     this.fireworkBurstCount = 0;
 
@@ -1798,12 +1913,11 @@ class ParticleSceneController {
       this.effectSprite.visible = true;
       this.effectSprite.scale.set(8.8, 2.6, 1);
       this.effectSprite.position.set(0, 4.35, 0.8);
-      return;
+    } else {
+      this.effectSprite.visible = false;
+      this.effectSprite.material.map = null;
+      this.effectSprite.material.opacity = 0;
     }
-
-    this.effectSprite.visible = false;
-    this.effectSprite.material.map = null;
-    this.effectSprite.material.opacity = 0;
 
     if (!this.fireworksEnabled) {
       for (const particle of this.fireworkMeta) {
@@ -2083,6 +2197,13 @@ class ParticleSceneController {
 }
 
 const sceneController = new ParticleSceneController(sceneCanvas);
+if (typeof window !== "undefined") {
+  window.applyParticleLevelSetting = function applyParticleLevelSetting() {
+    if (sceneController && typeof sceneController.applyParticleLevel === "function") {
+      sceneController.applyParticleLevel(window.particleLevel);
+    }
+  };
+}
 const initialDigitEntry = ensureDigitTexture(0);
 initializeGestureTrainer();
 preloadGestureLibraryFromAssets();
@@ -2114,6 +2235,7 @@ function drawHandResults(results) {
 
   if (results.multiHandLandmarks?.length) {
     const validGestureVectors = [];
+    const handRecognitionLabels = [];
     let maxHandSizePercent = 0;
     let validHands = 0;
     let tooFarHands = 0;
@@ -2140,12 +2262,18 @@ function drawHandResults(results) {
 
       if (handSize < MIN_HAND_SIZE_THRESHOLD) {
         tooFarHands += 1;
+        handRecognitionLabels.push("--");
         continue;
       }
 
       validHands += 1;
-      validGestureVectors.push(buildGestureVector(landmarks));
+      const gestureVector = buildGestureVector(landmarks);
+      validGestureVectors.push(gestureVector);
+      const recognizedDigit = classifyCustomDigit(gestureVector);
+      handRecognitionLabels.push(recognizedDigit === null ? "--" : String(recognizedDigit));
     }
+
+    updateHandRecognitionState(handRecognitionLabels);
 
     if (!validHands) {
       handSizePercentEl.textContent = "Hand size: --";
@@ -2172,11 +2300,18 @@ function drawHandResults(results) {
 
       const digit = classifyRecognizedDigit(validGestureVectors);
       if (digit !== null) {
+        lastDigitRecognizedAt = now;
+        if (sceneClearedForNoDigit) {
+          sceneClearedForNoDigit = false;
+          const textureEntry = ensureDigitTexture(digit);
+          sceneController.setDigitTexture(digit, textureEntry.texture, textureEntry.imageUrl);
+        }
         const digitCounts = countRecognizedDigits(validGestureVectors);
         const recognizedCount = digitCounts.get(digit) || 0;
         setTrackingState(`Digit recognized: ${digit} (${recognizedCount}/${validHands} hands)`);
         updateGesture(digit);
       } else {
+        clearDigitRecognitionStateForInactivity(now);
         if (now >= ribbonEffectProtectionUntil) {
           const ribbonMatchCount = getRibbonGestureMatchCount(validGestureVectors);
           const ribbonMajority = ribbonMatchCount > Math.floor(validHands / 2);
@@ -2216,6 +2351,8 @@ function drawHandResults(results) {
     ribbonPendingMatchSince = 0;
     ribbonPendingLastMatchedAt = 0;
     ribbonTriggeredCurrentHold = false;
+    clearDigitRecognitionStateForInactivity();
+    updateHandRecognitionState([]);
     setTrackingState("No hand detected");
     resetGestureStatus();
   }
@@ -2248,6 +2385,7 @@ if (typeof window !== "undefined") {
         selfieMode: true
       });
     }
+    updateHandRecognitionState([]);
   };
 }
 
@@ -2277,8 +2415,8 @@ async function startCamera() {
 
     const selectedDeviceId = getSelectedCameraDeviceId();
     const videoConstraints = selectedDeviceId
-      ? { deviceId: { exact: selectedDeviceId }, width: { ideal: 960 }, height: { ideal: 720 } }
-      : { facingMode: "user", width: { ideal: 960 }, height: { ideal: 720 } };
+      ? { deviceId: { exact: selectedDeviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+      : { facingMode: "user", width: { ideal: 1920 }, height: { ideal: 1080 } };
 
     activeStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
 

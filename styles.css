@@ -447,6 +447,20 @@ body::after {
   text-transform: uppercase;
   color: var(--muted);
 }
+
+.hand-recognition-state {
+  margin-top: 0.55rem;
+  min-height: 1.2rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.hand-recognition-state[hidden] {
+  display: none;
+}
+
 .scene-header-actions {
   display: flex;
   align-items: center;
