@@ -12,7 +12,7 @@ Serve the folder over `http://localhost` or `https://` because camera access doe
 
 From the project root:
 
-`./scripts/start.ps1`
+`./scripts/start.ps1`  or './start.cmd'
 
 Optional custom port:
 
@@ -24,7 +24,7 @@ Then open the printed URL (default: `http://127.0.0.1:8080`).
 
 From the project root:
 
-`./scripts/stop.ps1`
+`./scripts/stop.ps1` or close window opened by './start.cmd'
 
 ## Custom digit PNG folder
 
