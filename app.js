@@ -69,7 +69,6 @@ const GESTURE_CHANGE_SOUND_URL = "./assets/audio/gesture-change.wav";
 const FIREWORKS_SOUND_URL = "./assets/audio/fireworks.wav";
 const RIBBON_CUT_SOUND_URL = "./assets/audio/ribboncut.wav";
 const SPECIAL_EFFECT_MATCH_THRESHOLD = 0.2;
-const MIN_HAND_SIZE_THRESHOLD = 0.15;
 const NO_DIGIT_CLEAR_DELAY_MS = 3000;
 
 if (typeof window !== "undefined") {
@@ -77,6 +76,7 @@ if (typeof window !== "undefined") {
 
   window.maxNumHands = Number.isInteger(window.maxNumHands) ? window.maxNumHands : 1;
   window.particleLevel = ["low", "medium", "high"].includes(String(window.particleLevel).toLowerCase()) ? String(window.particleLevel).toLowerCase() : "medium";
+  window.minHandSizeThreshold = Number.isFinite(window.minHandSizeThreshold) ? Math.max(0.01, Math.min(1, Number(window.minHandSizeThreshold))) : 0.10;
   window.PARTICLE_LEVEL_COUNTS = {
     low: 1100,
     medium: 2200,
@@ -116,6 +116,16 @@ if (typeof window !== "undefined") {
   window.setSoundEnabled = function setSoundEnabled(value) {
     window.SOUND_ENABLED = Boolean(value);
     console.info("SOUND_ENABLED set to", window.SOUND_ENABLED);
+  };
+
+  window.setMinHandSizeThreshold = function setMinHandSizeThreshold(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 1) {
+      console.warn("setMinHandSizeThreshold expects a value between 0 and 1 (for example 0.1 for 10%).");
+      return;
+    }
+    window.minHandSizeThreshold = parsed;
+    console.info("minHandSizeThreshold set to", parsed);
   };
 }
 const DEFAULT_RIBBON_CONFIG = {
@@ -280,6 +290,15 @@ function updateHandRecognitionState(labels = []) {
 
   handRecognitionStateEl.hidden = false;
   handRecognitionStateEl.textContent = states.join("  ");
+}
+
+function getMinHandSizeThreshold() {
+  if (typeof window === "undefined") {
+    return 0.10;
+  }
+
+  const threshold = Number(window.minHandSizeThreshold);
+  return Number.isFinite(threshold) && threshold > 0 ? threshold : 0.10;
 }
 
 function queueRibbonStatusReset(delayMs = 1400) {
@@ -2260,7 +2279,7 @@ function drawHandResults(results) {
       const handSizePercent = Math.max(0, handSize * 100);
       maxHandSizePercent = Math.max(maxHandSizePercent, handSizePercent);
 
-      if (handSize < MIN_HAND_SIZE_THRESHOLD) {
+      if (handSize < getMinHandSizeThreshold()) {
         tooFarHands += 1;
         handRecognitionLabels.push("--");
         continue;
